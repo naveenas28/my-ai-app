@@ -1,0 +1,11 @@
+{
+  "name": "Remix Remix Naveen AI 28",
+  "description": "Bilingual, voice-enabled modern mobile app for farmers featuring real-time AI Crop Advisory, disease diagnosis, weather warnings, market price predictions, and local community post sharing.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

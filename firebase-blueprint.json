@@ -1,0 +1,244 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Registered farmer profile and account session state in AgriVerse AI",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique user ID (UUID / Firebase Auth UID)" },
+        "mobileNumber": { "type": "string", "description": "Farmer 10-digit mobile phone number" },
+        "loginMethod": { "type": "string", "description": "Method of authentication e.g. DEV_OTP or SMS_OTP" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "ISO creation timestamp" },
+        "lastLogin": { "type": "string", "format": "date-time", "description": "ISO timestamp of last login session" },
+        "language": { "type": "string", "description": "Preferred interface language code" },
+        "state": { "type": "string", "description": "Primary agricultural state e.g. Karnataka" },
+        "district": { "type": "string", "description": "District name e.g. Chikkaballapura" },
+        "village": { "type": "string", "description": "Village or Gram Panchayat name" },
+        "profileCompleted": { "type": "boolean", "description": "Whether full farmer profile parameters are completed" },
+        "role": { "type": "string", "description": "Account role e.g. farmer, expert, admin" },
+        "accountStatus": { "type": "string", "description": "Status of account e.g. active, suspended" },
+        "name": { "type": "string", "description": "Full display name of the farmer" },
+        "gender": { "type": "string", "description": "Gender e.g. Male, Female, Other" },
+        "dob": { "type": "string", "description": "Date of Birth YYYY-MM-DD" },
+        "pincode": { "type": "string", "description": "6-digit postal PIN code" },
+        "farmName": { "type": "string", "description": "Name of primary farm or land plot" },
+        "farmSizeAcres": { "type": "number", "description": "Size of land plot in acres" },
+        "soilType": { "type": "string", "description": "Soil type e.g. Red Loam, Black Cotton" },
+        "waterSource": { "type": "string", "description": "Primary irrigation water source" },
+        "primaryCrops": { "type": "array", "description": "Primary crops cultivated" },
+        "farmingType": { "type": "string", "description": "Farming practice e.g. Organic, Conventional, Mixed" },
+        "photoURL": { "type": "string", "description": "Profile picture storage download URL" }
+      },
+      "required": [
+        "uid",
+        "mobileNumber",
+        "loginMethod",
+        "createdAt",
+        "lastLogin",
+        "language",
+        "state",
+        "district",
+        "village",
+        "profileCompleted",
+        "role",
+        "accountStatus"
+      ]
+    },
+    "Farm": {
+      "title": "Farm",
+      "description": "Farmer farm plot information",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "farmName": { "type": "string" },
+        "location": { "type": "string" },
+        "acreage": { "type": "number" },
+        "soilType": { "type": "string" },
+        "irrigationType": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "farmName", "acreage", "createdAt"]
+    },
+    "Crop": {
+      "title": "Crop",
+      "description": "Cultivated crop batch logs",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "cropName": { "type": "string" },
+        "variety": { "type": "string" },
+        "sowingDate": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "cropName", "createdAt"]
+    },
+    "WeatherCache": {
+      "title": "WeatherCache",
+      "description": "Cached weather information for location districts",
+      "type": "object",
+      "properties": {
+        "district": { "type": "string" },
+        "temperature": { "type": "number" },
+        "condition": { "type": "string" },
+        "humidity": { "type": "number" },
+        "rainfall": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["district", "temperature", "condition", "updatedAt"]
+    },
+    "MarketPrice": {
+      "title": "MarketPrice",
+      "description": "Mandi crop market prices",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "commodity": { "type": "string" },
+        "mandi": { "type": "string" },
+        "modalPrice": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "commodity", "modalPrice", "updatedAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "System alerts and notifications for farmers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "title", "message", "read", "createdAt"]
+    },
+    "CommunityPost": {
+      "title": "CommunityPost",
+      "description": "Farmer discussion post in community feed",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "author": { "type": "string" },
+        "authorUid": { "type": "string" },
+        "content": { "type": "string" },
+        "district": { "type": "string" },
+        "likesCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "author", "authorUid", "content", "createdAt"]
+    },
+    "ChatRoom": {
+      "title": "ChatRoom",
+      "description": "Realtime group or peer messaging room",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "type": { "type": "string" },
+        "members": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "members", "updatedAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Equipment, seed, or fertilizer order record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "itemTitle": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "amount", "status", "createdAt"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Financial ledger record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "type": { "type": "string" },
+        "amount": { "type": "number" },
+        "description": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "type", "amount", "status", "createdAt"]
+    },
+    "CropDiagnosis": {
+      "title": "CropDiagnosis",
+      "description": "AI Crop Doctor disease analysis and prescription report",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "crop": { "type": "string" },
+        "disease": { "type": "string" },
+        "confidence": { "type": "number" },
+        "severity": { "type": "string" },
+        "symptoms": { "type": "string" },
+        "treatment": { "type": "string" },
+        "prevention": { "type": "string" },
+        "precautions": { "type": "string" },
+        "image": { "type": "string" },
+        "location": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "userId", "crop", "disease", "confidence", "severity", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/crop_diagnoses/{diagnosisId}": {
+      "schema": "CropDiagnosis",
+      "description": "Crop leaf scan diagnosis report records"
+    },
+    "/users/{uid}": {
+      "schema": "User",
+      "description": "User account documents containing authentication session metadata"
+    },
+    "/farms/{farmId}": {
+      "schema": "Farm",
+      "description": "Farm plots collection"
+    },
+    "/crops/{cropId}": {
+      "schema": "Crop",
+      "description": "Cultivated crops collection"
+    },
+    "/weather_cache/{district}": {
+      "schema": "WeatherCache",
+      "description": "Weather cache records per district"
+    },
+    "/market_prices/{priceId}": {
+      "schema": "MarketPrice",
+      "description": "Mandi price listings"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User notification logs"
+    },
+    "/community_posts/{postId}": {
+      "schema": "CommunityPost",
+      "description": "Community posts feed"
+    },
+    "/chat_rooms/{roomId}": {
+      "schema": "ChatRoom",
+      "description": "Farmer discussion chat rooms"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Marketplace purchase orders"
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "User credit/debit transaction logs"
+    }
+  }
+}

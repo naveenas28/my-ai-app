@@ -1,0 +1,156 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // 1. Users Collection - Profiles and account data
+    match /users/{uid} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if isOwner(uid);
+
+      match /{allPaths=**} {
+        allow read, write: if true;
+      }
+    }
+
+    // 2. Farms Collection
+    match /farms/{farmId} {
+      allow read, write: if true;
+    }
+
+    // 3. Crops Collection
+    match /crops/{cropId} {
+      allow read, write: if true;
+    }
+
+    // 4. Weather Cache & Snapshots
+    match /weather_cache/{district} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /weather_snapshots/{uid} {
+      allow read, write: if true;
+    }
+
+    // 5. Market Prices
+    match /market_prices/{priceId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /crop_prices/{priceId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // 6. Notifications Collection
+    match /notifications/{notificationId} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if true;
+    }
+
+    // 7. Community Posts Collection (Main and Legacy)
+    match /posts/{postId} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if true;
+
+      match /comments/{commentId} {
+        allow read, write: if true;
+      }
+
+      match /likes/{userId} {
+        allow read, write: if true;
+      }
+
+      match /{allPaths=**} {
+        allow read, write: if true;
+      }
+    }
+
+    match /community_posts/{postId} {
+      allow read, write: if true;
+    }
+
+    // 8. Real-time Farmer Chat Rooms & Messages
+    match /chats/{chatId} {
+      allow read, write: if true;
+
+      match /messages/{messageId} {
+        allow read, write: if true;
+      }
+
+      match /{allPaths=**} {
+        allow read, write: if true;
+      }
+    }
+
+    match /chat_rooms/{roomId} {
+      allow read, write: if true;
+      
+      match /messages/{messageId} {
+        allow read, write: if true;
+      }
+    }
+
+    // 9. Cooperative Network & Shared Farming Resources
+    match /cooperatives/{cooperativeId} {
+      allow read, write: if true;
+    }
+
+    match /shared_resources/{resourceId} {
+      allow read, write: if true;
+    }
+
+    match /cooperative_chats/{messageId} {
+      allow read, write: if true;
+    }
+
+    match /announcements/{announcementId} {
+      allow read, write: if true;
+    }
+
+    // 10. Orders & Transactions
+    match /orders/{orderId} {
+      allow read, write: if true;
+    }
+
+    match /transactions/{transactionId} {
+      allow read, write: if true;
+    }
+
+    // 11. AI Diagnoses & Reports
+    match /crop_diagnoses/{diagnosisId} {
+      allow read, write: if true;
+    }
+
+    // 12. Reminders & Schemes
+    match /reminders/{reminderId} {
+      allow read, write: if true;
+    }
+
+    match /soil_reminders/{reminderId} {
+      allow read, write: if true;
+    }
+
+    match /government_schemes/{schemeId} {
+      allow read, write: if true;
+    }
+
+    // Fallback document matcher for operational continuity
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
