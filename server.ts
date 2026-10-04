@@ -72,28 +72,57 @@ app.get(['/api', '/api/index', '/api/index.js'], (req, res) => {
   });
 });
 
+// Dynamic environment key resolution for serverless runtime
+const getEffectiveApiKey = () => {
+  const direct = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENAI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+  if (direct && direct.trim() && !direct.includes('MY_GEMINI_API_KEY')) {
+    return direct.trim();
+  }
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.toLowerCase().includes('gemini') || k.toLowerCase().includes('google_api_key')) {
+      if (v && v.trim() && !v.includes('MY_GEMINI_API_KEY')) {
+        return v.trim();
+      }
+    }
+  }
+  return '';
+};
+
+const getAiClient = () => {
+  const key = getEffectiveApiKey();
+  return new GoogleGenAI({
+    apiKey: key || '',
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+};
+
 // Healthcheck endpoint
 app.get(['/api/health', '/health'], (req, res) => {
+  const currentKey = getEffectiveApiKey();
+  const matchedEnvKeys = Object.keys(process.env).filter(k => 
+    k.toUpperCase().includes('GEMINI') || 
+    k.toUpperCase().includes('GOOGLE') || 
+    k.toUpperCase().includes('URL') ||
+    k.toUpperCase().includes('GEONAMES')
+  );
+
   res.json({
     status: 'ok',
     mode: isProd ? 'production' : 'development',
     serverless: Boolean(process.env.VERCEL),
     timestamp: new Date().toISOString(),
-    geminiKeyConfigured: Boolean(process.env.GEMINI_API_KEY),
+    geminiKeyConfigured: Boolean(currentKey),
+    detectedEnvKeys: matchedEnvKeys,
     costTier: '₹0 ACTIVE COST (100% Free / Zero Billing)'
   });
 });
 
-// Initialise Gemini SDK with secure server-side API Key
-const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENAI_API_KEY;
-const ai = new GoogleGenAI({
-  apiKey: apiKey || '',
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
+let apiKey = getEffectiveApiKey();
+let ai = getAiClient();
 
 // Server-side database files + memory cache synced on disk for permanent persistence
 const initialPosts = [
