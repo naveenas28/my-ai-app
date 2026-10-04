@@ -11,11 +11,11 @@ async function testVercelHandler() {
   process.env.NODE_ENV = 'production';
 
   // Import the exported Express app as Vercel does
-  const { default: app } = await import('../api/index.ts');
-  assert(typeof app === 'function', 'api/index.ts must export a function (Express app)');
+  const { default: handler } = await import('../api/index.js');
+  assert(typeof handler === 'function', 'api/index.js must export a handler function');
 
   // Helper to simulate Vercel serverless invocation using node's http server for precise testing
-  const server = http.createServer(app);
+  const server = http.createServer(handler);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
   const baseUrl = `http://127.0.0.1:${port}`;

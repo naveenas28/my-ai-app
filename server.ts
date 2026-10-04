@@ -29,15 +29,47 @@ app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 // Vercel serverless path normalization middleware:
-// Ensures rewritten /api/index recovers original route from Vercel headers if present
+// Ensures rewritten /api/* recovers original route from Vercel headers if present
 app.use((req, res, next) => {
-  const forwardedUrl = (req.headers['x-matched-path'] || req.headers['x-forwarded-url'] || req.headers['x-vercel-matched-path']) as string | undefined;
-  if (req.url === '/api/index' || req.url === '/api/index.ts' || req.url === '/api' || req.url === '/api/') {
-    if (forwardedUrl && forwardedUrl.startsWith('/api')) {
-      req.url = forwardedUrl;
-    }
+  const forwardedPath = (
+    req.headers['x-matched-path'] ||
+    req.headers['x-forwarded-url'] ||
+    req.headers['x-vercel-matched-path']
+  ) as string | undefined;
+
+  const isEntrypoint =
+    req.url.startsWith('/api/index') ||
+    req.url.startsWith('/api/server') ||
+    req.url === '/api' ||
+    req.url === '/api/' ||
+    req.url.startsWith('/index');
+
+  if (isEntrypoint && forwardedPath) {
+    const queryIdx = req.url.indexOf('?');
+    const query = queryIdx !== -1 ? req.url.slice(queryIdx) : '';
+    const cleanForwarded = forwardedPath.split('?')[0];
+    req.url = cleanForwarded + query;
   }
   next();
+});
+
+// Root API gateway discovery
+app.get(['/api', '/api/index', '/api/index.js'], (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'AgriVerse AI Backend API',
+    mode: isProd ? 'production' : 'development',
+    serverless: true,
+    timestamp: new Date().toISOString(),
+    endpoints: [
+      '/api/health',
+      '/api/chat',
+      '/api/weather',
+      '/api/mandi',
+      '/api/agriculture/mandi',
+      '/api/diagnose'
+    ]
+  });
 });
 
 // Healthcheck endpoint
@@ -132,16 +164,24 @@ const initialBudget = [
   { id: '3', name: 'Tractor Diesel (3L)', amount: 270 }
 ];
 
-const POSTS_FILE = path.join(__dirname, 'posts-db.json');
-const PRODUCTS_FILE = path.join(__dirname, 'products-db.json');
-const BUDGET_FILE = path.join(__dirname, 'budget-db.json');
-const REPORTS_FILE = path.join(__dirname, 'reports-db.json');
-const IRRIGATION_FILE = path.join(__dirname, 'irrigation-db.json');
+const dataDir = process.env.VERCEL ? '/tmp' : __dirname;
+
+const POSTS_FILE = path.join(dataDir, 'posts-db.json');
+const PRODUCTS_FILE = path.join(dataDir, 'products-db.json');
+const BUDGET_FILE = path.join(dataDir, 'budget-db.json');
+const REPORTS_FILE = path.join(dataDir, 'reports-db.json');
+const IRRIGATION_FILE = path.join(dataDir, 'irrigation-db.json');
 
 const loadJSON = (filePath: string, defaultData: any) => {
   try {
     if (fs.existsSync(filePath)) {
       const content = fs.readFileSync(filePath, 'utf8');
+      return JSON.parse(content);
+    }
+    // Check seed file in process.cwd() if running in Vercel /tmp
+    const seedPath = path.join(process.cwd(), path.basename(filePath));
+    if (fs.existsSync(seedPath)) {
+      const content = fs.readFileSync(seedPath, 'utf8');
       return JSON.parse(content);
     }
   } catch (err) {
@@ -167,8 +207,8 @@ let serverReports = loadJSON(REPORTS_FILE, []);
 
 // NEW LIVE WEATHER API ENDPOINT
 app.get(['/api/weather', '/weather'], async (req, res) => {
-  const latStr = req.query.lat as string | undefined;
-  const lonStr = req.query.lon as string | undefined;
+  const latStr = (req.query.lat || req.query.latitude) as string | undefined;
+  const lonStr = (req.query.lon || req.query.longitude || req.query.lng) as string | undefined;
 
   let lat = 13.4355;
   let lon = 77.7279;
@@ -576,13 +616,34 @@ Respond STRICTLY in JSON format matching this schema:
 CRITICAL: Translate all string values into the local language with code "${language}" (where 'kn' is Kannada, 'hi' is Hindi, 'ta' is Tamil, 'te' is Telugu, 'ml' is Malayalam, 'bn' is Bengali, 'mr' is Marathi, 'pa' is Punjabi, 'en' is English). Keep JSON key names EXACTLY in English as defined above. Do not wrap in markdown boxes.`,
     };
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: { parts: [imagePart, textPart] },
-      config: {
-        responseMimeType: 'application/json',
+    let response: any;
+    try {
+      response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: { parts: [imagePart, textPart] },
+        config: {
+          responseMimeType: 'application/json',
+        }
+      });
+    } catch (mErr: any) {
+      try {
+        response = await ai.models.generateContent({
+          model: 'gemini-2.0-flash',
+          contents: { parts: [imagePart, textPart] },
+          config: {
+            responseMimeType: 'application/json',
+          }
+        });
+      } catch (fErr: any) {
+        response = await ai.models.generateContent({
+          model: 'gemini-1.5-flash',
+          contents: { parts: [imagePart, textPart] },
+          config: {
+            responseMimeType: 'application/json',
+          }
+        });
       }
-    });
+    }
 
     const parsed = JSON.parse(response.text || '{}');
 
@@ -1096,10 +1157,34 @@ const startServer = async () => {
   });
 };
 
-// Only listen when running standalone directly (not when imported as a Vercel serverless function)
-if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
-  startServer();
+// Only listen when running standalone directly via CLI (not when running as a Vercel serverless function)
+const isServerless = Boolean(
+  process.env.VERCEL ||
+  process.env.VERCEL_ENV ||
+  process.env.NOW_REGION ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.LAMBDA_TASK_ROOT
+);
+
+if (!isServerless) {
+  const isDirectRun = process.argv[1] && (
+    process.argv[1].endsWith('server.ts') ||
+    process.argv[1].endsWith('server.js') ||
+    process.argv[1].endsWith('server.cjs')
+  );
+  if (isDirectRun) {
+    startServer();
+  }
 }
 
-export default app;
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+export default function handler(req: any, res: any) {
+  return app(req, res);
+}
+
 export { app };
