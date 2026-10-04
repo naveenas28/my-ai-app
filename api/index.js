@@ -81461,15 +81461,29 @@ app.get(["/api", "/api/index", "/api/index.js"], (req, res) => {
     ]
   });
 });
+var cleanKey = (key) => {
+  if (!key) return "";
+  let cleaned = key.trim();
+  if (cleaned.startsWith('"') && cleaned.endsWith('"') || cleaned.startsWith("'") && cleaned.endsWith("'")) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+  if (!cleaned || cleaned.includes("MY_GEMINI_API_KEY")) {
+    return "";
+  }
+  return cleaned;
+};
 var getEffectiveApiKey = () => {
-  const direct = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENAI_API_KEY || process.env.VITE_GEMINI_API_KEY;
-  if (direct && direct.trim() && !direct.includes("MY_GEMINI_API_KEY")) {
-    return direct.trim();
+  const direct = cleanKey(
+    process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENAI_API_KEY || process.env.VITE_GEMINI_API_KEY
+  );
+  if (direct) {
+    return direct;
   }
   for (const [k, v] of Object.entries(process.env)) {
     if (k.toLowerCase().includes("gemini") || k.toLowerCase().includes("google_api_key")) {
-      if (v && v.trim() && !v.includes("MY_GEMINI_API_KEY")) {
-        return v.trim();
+      const c = cleanKey(v);
+      if (c) {
+        return c;
       }
     }
   }
@@ -81488,6 +81502,7 @@ var getAiClient = () => {
 };
 app.get(["/api/health", "/health"], (req, res) => {
   const currentKey = getEffectiveApiKey();
+  const rawKey = process.env.GEMINI_API_KEY || "";
   const matchedEnvKeys = Object.keys(process.env).filter(
     (k) => k.toUpperCase().includes("GEMINI") || k.toUpperCase().includes("GOOGLE") || k.toUpperCase().includes("URL") || k.toUpperCase().includes("GEONAMES")
   );
@@ -81497,6 +81512,12 @@ app.get(["/api/health", "/health"], (req, res) => {
     serverless: Boolean(process.env.VERCEL),
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     geminiKeyConfigured: Boolean(currentKey),
+    geminiKeyDiagnostic: {
+      length: rawKey.length,
+      hasQuotes: rawKey.startsWith('"') || rawKey.startsWith("'"),
+      isPlaceholder: rawKey.includes("MY_GEMINI_API_KEY"),
+      prefix: rawKey.length >= 4 ? rawKey.slice(0, 4) : ""
+    },
     detectedEnvKeys: matchedEnvKeys,
     costTier: "\u20B90 ACTIVE COST (100% Free / Zero Billing)"
   });
