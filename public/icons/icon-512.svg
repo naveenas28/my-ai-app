@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bgGrad512" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#065f46"/>
+      <stop offset="50%" stop-color="#047857"/>
+      <stop offset="100%" stop-color="#022c22"/>
+    </linearGradient>
+    <linearGradient id="leafGrad512" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="goldGrad512" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fef08a"/>
+      <stop offset="100%" stop-color="#eab308"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="128" fill="url(#bgGrad512)"/>
+  <path d="M256 96 C 360 96, 416 168, 416 272 C 416 376, 320 416, 256 416 C 192 416, 96 376, 96 272 C 96 168, 152 96, 256 96 Z" fill="url(#leafGrad512)"/>
+  <path d="M256 128 C 256 220, 256 312, 256 400" stroke="#064e3b" stroke-width="16" stroke-linecap="round"/>
+  <path d="M256 220 C 290 190, 340 195, 360 210" stroke="#064e3b" stroke-width="12" stroke-linecap="round"/>
+  <path d="M256 280 C 220 250, 170 255, 150 270" stroke="#064e3b" stroke-width="12" stroke-linecap="round"/>
+  <path d="M256 330 C 290 310, 330 315, 350 325" stroke="#064e3b" stroke-width="12" stroke-linecap="round"/>
+  <path d="M380 90 L390 120 L420 130 L390 140 L380 170 L370 140 L340 130 L370 120 Z" fill="url(#goldGrad512)"/>
+</svg>

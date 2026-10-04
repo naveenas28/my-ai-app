@@ -9,16 +9,13 @@ import {
   ShieldCheck,
   Heart,
   MessageSquare,
-  Bookmark,
-  Share2,
   Sparkles,
-  AlertOctagon,
-  Languages,
   Clock,
-  MoreVertical,
   Flag,
   Globe,
-  CornerUpLeft
+  Tag,
+  MapPin,
+  RotateCcw
 } from 'lucide-react';
 import {
   collection,
@@ -26,13 +23,11 @@ import {
   onSnapshot,
   query,
   orderBy,
+  serverTimestamp,
   doc,
   updateDoc,
-  arrayUnion,
-  arrayRemove,
   getDocs,
-  setDoc,
-  serverTimestamp
+  limit
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { Post } from '../types';
@@ -47,6 +42,32 @@ interface VoicePostsSystemProps {
   village: string;
   isVerifiedUser: boolean;
 }
+
+const CROP_TAGS = [
+  { value: 'Tomato', label: 'Tomato (ಟೊಮೆಟೊ)' },
+  { value: 'Rice/Paddy', label: 'Rice / Paddy (ಭತ್ತ)' },
+  { value: 'Onion', label: 'Onion (ಈರುಳ್ಳಿ)' },
+  { value: 'Ragi/Millet', label: 'Ragi / Millet (ರಾಗಿ)' },
+  { value: 'Cotton', label: 'Cotton (ಹತ್ತಿ)' },
+  { value: 'Sugarcane', label: 'Sugarcane (ಕಬ್ಬು)' },
+  { value: 'Vegetables', label: 'Vegetables (ತರಕಾರಿಗಳು)' },
+  { value: 'General Farming', label: 'General Farming (ಸಾಮಾನ್ಯ ಕೃಷಿ)' }
+];
+
+const KARNATAKA_DISTRICTS = [
+  'Chikkaballapura',
+  'Kolar',
+  'Mandya',
+  'Dharwad',
+  'Koppal',
+  'Raichur',
+  'Belagavi',
+  'Tumakuru',
+  'Shivamogga',
+  'Mysuru',
+  'Hassan',
+  'Ballari'
+];
 
 export function VoicePostsSystem({
   currentLang,
@@ -65,15 +86,17 @@ export function VoicePostsSystem({
   const [voiceRecordDuration, setVoiceRecordDuration] = useState(0);
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
   const [previewBase64, setPreviewBase64] = useState<string | null>(null);
+  const [isPublishing, setIsPublishing] = useState<boolean>(false);
 
   const { language } = useI18n();
 
-  // Form selections
-  const [selectedCategory, setSelectedCategory] = useState('general');
-  const [selectedPostDistrict, setSelectedPostDistrict] = useState(district || 'Kolar');
-  const [selectedPostVillage, setSelectedPostVillage] = useState(village || 'Anemadagu');
-  const [selectedVoiceLanguage, setSelectedVoiceLanguage] = useState(language || currentLang || 'en');
+  // Form selections: Professional flow fields
+  const [textTitle, setTextTitle] = useState('');
   const [textCaption, setTextCaption] = useState('');
+  const [selectedCropTag, setSelectedCropTag] = useState('Tomato');
+  const [selectedPostDistrict, setSelectedPostDistrict] = useState(district || 'Chikkaballapura');
+  const [selectedPostVillage, setSelectedPostVillage] = useState(village || 'Anemadagu');
+  const [selectedVoiceLanguage, setSelectedVoiceLanguage] = useState(language || currentLang || 'kn');
 
   useEffect(() => {
     if (language) {
@@ -98,11 +121,8 @@ export function VoicePostsSystem({
   const [activeCommentPostId, setActiveCommentPostId] = useState<string | null>(null);
   const [newCommentText, setNewCommentText] = useState('');
 
-  // Active report dialogs
+  // Flagged posts
   const [flaggedPosts, setFlaggedPosts] = useState<string[]>([]);
-  const [bookmarkedPostIds, setBookmarkedPostIds] = useState<string[]>(() => {
-    return JSON.parse(localStorage.getItem('agri_saved_posts') || '[]');
-  });
 
   // Media streams
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -110,82 +130,83 @@ export function VoicePostsSystem({
   const voiceTimerRef = useRef<any>(null);
   const audioElementsRef = useRef<Record<string, HTMLAudioElement>>({});
 
-  // 1. Listen to Realtime Firestore Collection
+  // 1. Listen to Realtime Firestore Collection and Server API fallback
   useEffect(() => {
     setLoading(true);
-    const q = query(collection(db, 'posts'), orderBy('createdAt', 'desc'));
-    
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
-      if (snapshot.empty) {
-        // If empty, let's provision initial mock cards in Firestore so they see content
-        try {
-          const defaultMocks = [
-            {
-              author: "Channappa Gowda",
-              authorUid: "mock_user_1",
-              isVerified: true,
-              content: "🌾 I shared an audio message warning raiyatas about Paddy stem borer in Koppal. Early light trap setup helpful.",
-              district: "Koppal",
-              village: "Kushtagi",
-              category: "disease",
-              likes: 12,
-              likedBy: ["system_user_2"],
-              voiceUrl: "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAERKgAAKkoAAAEKABgAZGF0YQQAAAAAAA==",
-              voiceCaption: " Stem borer infestation starting in paddy. Recommend Neem oil extract foliage spray (5ml/L) or Light trap setup near boundaries.",
-              voiceTranslation: "Infestation of stem borer starting in paddy crop. Sowing light traps is recommended.",
-              voiceSummary: "Foliar neem sprays and boundary light traps counteract stem borer risks.",
-              voiceLang: "kn",
-              time: "2 hours ago",
-              createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-              comments: [
-                { id: "comm_1", author: "Basavaraj", content: "Yes sir, light traps are very budget friendly! Applied in our field too.", time: "1 hour ago", createdAt: new Date().toISOString() }
-              ]
-            }
-          ];
-          for (const item of defaultMocks) {
-            await addDoc(collection(db, 'posts'), {
-              ...item,
-              createdAt: serverTimestamp()
-            });
-          }
-        } catch (err) {
-          console.log("Could not seed mock posts inside sandboxed rules:", err);
-        }
-      }
 
-      const pData: Post[] = [];
-      snapshot.forEach((doc) => {
-        const d = doc.data();
-        pData.push({
-          id: doc.id,
-          author: d.author,
-          authorUid: d.authorUid,
-          isVerified: d.isVerified || false,
-          content: d.content || '',
-          image: d.image,
-          voiceUrl: d.voiceUrl,
-          voiceCaption: d.voiceCaption, // Original transcription
-          voiceTranslation: d.voiceTranslation, // English translation
-          voiceSummary: d.voiceSummary, // AI Agriculture summary
-          voiceLang: d.voiceLang || 'en',
-          likes: d.likes || 0,
-          likedBy: d.likedBy || [],
-          district: d.district || 'Kolar',
-          village: d.village || 'Anemadagu',
-          category: d.category || 'general',
-          time: d.time || 'Just now',
-          comments: d.comments || []
-        } as any);
-      });
-      setPostsList(pData);
-      setLoading(false);
-    }, (error) => {
-      console.warn("Firestore listener failed:", error);
-      setLoading(false);
-    });
+    const loadPostsFromServer = async () => {
+      try {
+        const res = await fetch('/api/posts');
+        if (res.ok) {
+          const serverPosts = await res.json();
+          if (Array.isArray(serverPosts) && serverPosts.length > 0) {
+            setPostsList((prev) => (prev.length === 0 ? serverPosts : prev));
+          }
+        }
+      } catch (e) {
+        console.warn('Server posts fetch warning:', e);
+      }
+    };
+
+    loadPostsFromServer();
+
+    const q = query(collection(db, 'posts'), orderBy('createdAt', 'desc'), limit(50));
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const pData: Post[] = [];
+        snapshot.forEach((docSnap) => {
+          const d = docSnap.data();
+          pData.push({
+            id: docSnap.id,
+            author: d.author || 'Farmer Partner',
+            authorUid: d.authorUid,
+            isVerified: d.isVerified || false,
+            title: d.title,
+            content: d.content || d.title || '',
+            image: d.image,
+            voiceUrl: d.voiceUrl,
+            voiceDuration: d.voiceDuration,
+            voiceCaption: d.voiceCaption || d.transcript,
+            voiceTranslation: d.voiceTranslation,
+            voiceSummary: d.voiceSummary,
+            voiceLang: d.voiceLang || 'en',
+            crop: d.crop || d.category || 'General',
+            likes: d.likes || 0,
+            likedBy: d.likedBy || [],
+            district: d.district || 'Karnataka',
+            village: d.village || '',
+            category: d.category || 'general',
+            postType: d.postType || (d.voiceUrl ? 'voice' : 'text'),
+            time: d.createdAt?.toDate ? formatTimeAgo(d.createdAt.toDate()) : 'Recently',
+            comments: d.comments || []
+          } as any);
+        });
+        if (pData.length > 0) {
+          setPostsList(pData);
+        }
+        setLoading(false);
+      },
+      (error) => {
+        console.warn('Firestore posts listener error, relying on server state:', error);
+        loadPostsFromServer();
+        setLoading(false);
+      }
+    );
 
     return () => unsubscribe();
   }, []);
+
+  const formatTimeAgo = (date: Date) => {
+    const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (diffSec < 60) return 'Just now';
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    return `${Math.floor(diffHr / 24)}d ago`;
+  };
 
   // 2. Audio timer duration counts
   const startDurationTimer = () => {
@@ -239,14 +260,14 @@ export function VoicePostsSystem({
         mediaRecorder.start(250);
         setRecorderState('recording');
         startDurationTimer();
-        triggerVisualToast('🎤 Recording voice note. Speak near microphone.');
+        triggerVisualToast('Recording started. Speak clearly near your microphone.');
       } else {
         throw new Error('Microphone device access is unavailable');
       }
     } catch (err: any) {
-      triggerVisualToast('Mic permission blocked. Using smart offline simulator.');
-      setRecorderState('recording');
-      startDurationTimer();
+      console.warn('Microphone error:', err);
+      triggerVisualToast('Microphone access blocked. Please allow microphone permissions in browser.');
+      setRecorderState('idle');
     }
   };
 
@@ -255,11 +276,7 @@ export function VoicePostsSystem({
       mediaRecorderRef.current.pause();
       setRecorderState('paused');
       stopDurationTimer();
-      triggerVisualToast('🎙️ Recording paused.');
-    } else if (recorderState === 'recording') {
-      // Simulator fallback pause
-      setRecorderState('paused');
-      stopDurationTimer();
+      triggerVisualToast('Recording paused.');
     }
   };
 
@@ -268,43 +285,38 @@ export function VoicePostsSystem({
       mediaRecorderRef.current.resume();
       setRecorderState('recording');
       startDurationTimer();
-      triggerVisualToast('🎤 Recording resumed.');
-    } else if (recorderState === 'paused') {
-      setRecorderState('recording');
-      startDurationTimer();
+      triggerVisualToast('Recording resumed.');
     }
   };
 
   const stopRecordingFlow = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
+      triggerVisualToast('Recording completed. Preview your audio below.');
     }
     setRecorderState('idle');
     stopDurationTimer();
-
-    // If simulating (no media recorder initialized)
-    if (!mediaRecorderRef.current) {
-      const simWav = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAERKgAAKkoAAAEKABgAZGF0YQQAAAAAAA==';
-      setPreviewBase64(simWav);
-      setPreviewBlobUrl(simWav);
-    }
-    triggerVisualToast('✅ Finished recording. Ready to preview/extract caption.');
   };
 
   const deleteRecordingFlow = () => {
+    if (previewBlobUrl) {
+      URL.revokeObjectURL(previewBlobUrl);
+    }
     setPreviewBlobUrl(null);
     setPreviewBase64(null);
     setVoiceRecordDuration(0);
     setAiCaptionsResult(null);
-    triggerVisualToast('🗑️ Recorded sound note deleted.');
+    setRecorderState('idle');
+    triggerVisualToast('Voice recording cleared.');
   };
 
-  // 4. Gemini Voice Intelligence Auto-Captioning
+  // 4. Optional Voice Note Auto-Captioning via Gemini
   const extractAICaptions = async () => {
-    if (!previewBase64) return;
-    setRecorderState('idle');
+    if (!previewBase64) {
+      triggerVisualToast('Please record a voice note first.');
+      return;
+    }
     setIsCapturingAI(true);
-    triggerVisualToast('✨ Transcribing and analyzing speech with Gemini AI...');
 
     try {
       const response = await fetch('/api/voice/caption', {
@@ -321,85 +333,135 @@ export function VoicePostsSystem({
         setAiCaptionsResult(captions);
         if (captions.transcription) {
           setTextCaption(captions.transcription);
+          if (!textTitle) {
+            setTextTitle(captions.transcription.substring(0, 50));
+          }
         }
-        triggerVisualToast('🤖 Auto-captions successfully generated!');
+        triggerVisualToast('Auto-caption successfully generated!');
       } else {
-        throw new Error();
+        triggerVisualToast('Auto-caption service unavailable. You can enter a short title manually.');
       }
     } catch (e) {
-      // Localized smart system defaults based on seed cues
-      const localizedFractions: Record<string, typeof aiCaptionsResult> = {
-        kn: {
-          transcription: "ಟೊಮೆಟೊ ಎಲೆಗಳ ಮೇಲೆ ಕಪ್ಪು ಕಲೆಗಳು ಕಂಡು ಬಂದಿವೆ, ಜೈವಿಕ ಬೂಸ್ಟರ್ ಸಿಂಪಡಿಸಬೇಕೆ?",
-          translation: "Black spots observed on tomato leaves, should I spray organic bio-booster?",
-          summary: "Farmer is requesting advice on tomato leaf blight mitigation."
-        },
-        hi: {
-          transcription: "टमाटर के पत्तों पर काले धब्बे दिख रहे हैं, क्या पत्ती मरोड़ रोग दवा छिड़कें?",
-          translation: "Black spots appear on tomato leaves, should leaf-curl fungicide be used?",
-          summary: "Farmer is querying organic treatment options for early blight."
-        },
-        en: {
-          transcription: "Severe weed spread across ragi beds. Suggest chemical or organic control details.",
-          translation: "Severe weed spread across ragi beds. Suggest chemical or organic control details.",
-          summary: "Addressing weed outbreaks on ragi crops through targeted controls."
-        }
-      };
-      const matchingRes = localizedFractions[selectedVoiceLanguage] || localizedFractions['en'];
-      setAiCaptionsResult(matchingRes);
-      if (matchingRes?.transcription) {
-        setTextCaption(matchingRes.transcription);
-      }
-      triggerVisualToast('🤖 Captured AI speech transcript parameters (Fallback Mode).');
+      triggerVisualToast('Could not generate auto-caption. You can type a short title manually.');
     } finally {
       setIsCapturingAI(false);
     }
   };
 
-  // 5. Publish Voice Post to Firestore
+  // 5. Professional & Secure Publish Voice Post to Firestore and Community Feed
   const publishVoicePost = async () => {
     if (!previewBase64) {
-      triggerVisualToast('Please record audio first.');
+      triggerVisualToast('Please record audio before publishing.');
       return;
     }
 
-    try {
-      const targetTranscription = aiCaptionsResult?.transcription || textCaption || "🎙️ Rural voice advisory update.";
-      const targetTranslation = aiCaptionsResult?.translation || "🎙️ Local language audio update shared by grower.";
-      const targetSummary = aiCaptionsResult?.summary || "Grower discussion concerning local cropping conditions.";
+    const activeUser = auth.currentUser;
+    const effectiveAuthorUid = activeUser?.uid || (userId && userId !== 'guest_uid' ? userId : null);
 
-      const newDoc = {
-        author: userName || "Farmer Partner",
-        authorUid: userId || "guest_uid",
-        isVerified: isVerifiedUser,
-        content: `🎙️ Sound broadcast on ${selectedPostDistrict} forum: "${targetTranscription}"`,
-        district: selectedPostDistrict,
-        village: selectedPostVillage,
-        category: selectedCategory,
+    if (!effectiveAuthorUid) {
+      triggerVisualToast('Please log in with your phone or account to publish a voice update.');
+      return;
+    }
+
+    setIsPublishing(true);
+
+    const postTitle = textTitle.trim() || textCaption.trim() || 'Voice Advisory Update';
+    const postTranscript = aiCaptionsResult?.transcription || textCaption.trim() || '';
+
+    const newPostData = {
+      author: userName || activeUser?.displayName || 'Farmer Partner',
+      authorUid: activeUser?.uid || effectiveAuthorUid,
+      isVerified: isVerifiedUser,
+      title: postTitle,
+      content: postTranscript ? `${postTitle} — "${postTranscript}"` : postTitle,
+      transcript: postTranscript,
+      voiceCaption: postTranscript,
+      voiceTranslation: aiCaptionsResult?.translation || undefined,
+      voiceSummary: aiCaptionsResult?.summary || undefined,
+      voiceLang: selectedVoiceLanguage,
+      district: selectedPostDistrict,
+      village: selectedPostVillage,
+      crop: selectedCropTag,
+      category: selectedCropTag.toLowerCase(),
+      postType: 'voice',
+      voiceUrl: previewBase64,
+      voiceDuration: voiceRecordDuration || 5,
+      likes: 0,
+      likedBy: [],
+      comments: [],
+      createdAt: serverTimestamp()
+    };
+
+    let generatedId = `voice_${Date.now()}`;
+
+    try {
+      // 1. Write to Firestore 'posts' collection
+      try {
+        const docRef = await addDoc(collection(db, 'posts'), newPostData);
+        generatedId = docRef.id;
+      } catch (firestoreError: any) {
+        console.warn('Firestore direct write warning, mirroring via community server endpoint:', firestoreError);
+      }
+
+      // 2. Mirror to Server /api/posts for offline and resilient persistence
+      try {
+        await fetch('/api/posts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...newPostData,
+            id: generatedId,
+            createdAt: new Date().toISOString()
+          })
+        });
+      } catch (apiError) {
+        console.warn('API mirror warning:', apiError);
+      }
+
+      // 3. Immediately display the new voice post locally
+      const publishedPost: Post = {
+        id: generatedId,
+        author: newPostData.author,
+        authorUid: newPostData.authorUid,
+        isVerified: newPostData.isVerified,
+        title: newPostData.title,
+        content: newPostData.content,
+        district: newPostData.district,
+        village: newPostData.village,
+        crop: newPostData.crop,
+        category: newPostData.category,
+        postType: 'voice',
+        voiceUrl: newPostData.voiceUrl,
+        voiceDuration: newPostData.voiceDuration,
+        voiceCaption: newPostData.voiceCaption,
+        voiceTranslation: newPostData.voiceTranslation,
+        voiceSummary: newPostData.voiceSummary,
+        voiceLang: newPostData.voiceLang,
         likes: 0,
         likedBy: [],
-        voiceUrl: previewBase64,
-        voiceCaption: targetTranscription,
-        voiceTranslation: targetTranslation,
-        voiceSummary: targetSummary,
-        voiceLang: selectedVoiceLanguage,
-        comments: [],
-        createdAt: serverTimestamp()
-      };
+        time: 'Just now',
+        comments: []
+      } as any;
 
-      await addDoc(collection(db, 'posts'), newDoc);
-      
-      // Clean states
+      setPostsList((prev) => [publishedPost, ...prev.filter((p) => p.id !== generatedId)]);
+
+      // 4. Required Success Notification
+      triggerVisualToast('Voice update published successfully.');
+
+      // 5. Clear / Reset recording form
+      if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl);
       setPreviewBlobUrl(null);
       setPreviewBase64(null);
       setVoiceRecordDuration(0);
+      setTextTitle('');
       setTextCaption('');
       setAiCaptionsResult(null);
-
-      triggerVisualToast('🌾 Voice broadcast successfully posted to AgriVerse!');
+      setRecorderState('idle');
     } catch (err: any) {
-      triggerVisualToast('Failed to write to database. Check Firestore rules.');
-      console.error(err);
+      console.error('Community Voice Hub publish error:', err);
+      triggerVisualToast('Failed to publish voice post. Please check your connection and account.');
+    } finally {
+      setIsPublishing(false);
     }
   };
 
@@ -434,134 +496,101 @@ export function VoicePostsSystem({
 
         audio.onended = () => {
           setPlayingPostId(null);
-          setAudioPlaybackProgress((prev) => ({
-            ...prev,
-            [postId]: 0
-          }));
+          setAudioPlaybackProgress((prev) => ({ ...prev, [postId]: 0 }));
         };
       }
 
-      audioElementsRef.current[postId].play().catch(() => {
-        // Handle simulator fallback
-        setPlayingPostId(postId);
-        let progress = 0;
-        const dur = 8;
-        setAudioPlaybackDuration((prev) => ({ ...prev, [postId]: dur }));
-        const interval = setInterval(() => {
-          progress += 0.5;
-          if (progress >= dur) {
-            clearInterval(interval);
-            setPlayingPostId(null);
-            setAudioPlaybackProgress((prev) => ({ ...prev, [postId]: 0 }));
-          } else {
-            setAudioPlaybackProgress((prev) => ({ ...prev, [postId]: progress }));
-          }
-        }, 500);
-      });
-
-      setPlayingPostId(postId);
+      audioElementsRef.current[postId]
+        .play()
+        .then(() => {
+          setPlayingPostId(postId);
+        })
+        .catch((e) => {
+          console.warn('Audio playback error:', e);
+          setPlayingPostId(null);
+        });
     }
   };
 
-  // 7. Atomic Interactions (Likes) in Firestore
+  // 7. Simple engagement: Like post
   const toggleLikePost = async (post: Post) => {
-    try {
-      const pDoc = doc(db, 'posts', post.id);
-      const isLiked = post.likedBy?.includes(userId);
-      const updatedLikedBy = isLiked
-        ? post.likedBy.filter((id) => id !== userId)
-        : [...(post.likedBy || []), userId];
+    const isLiked = post.likedBy?.includes(userId);
+    const updatedLikedBy = isLiked
+      ? (post.likedBy || []).filter((uid) => uid !== userId)
+      : [...(post.likedBy || []), userId];
+    const updatedLikes = isLiked ? Math.max(0, (post.likes || 1) - 1) : (post.likes || 0) + 1;
 
-      await updateDoc(pDoc, {
-        likedBy: updatedLikedBy,
-        likes: updatedLikedBy.length
-      });
-      triggerVisualToast(isLiked ? 'Removed like' : 'Liked post ❤️');
+    setPostsList((prev) =>
+      prev.map((p) => (p.id === post.id ? { ...p, likes: updatedLikes, likedBy: updatedLikedBy } : p))
+    );
+
+    try {
+      const docRef = doc(db, 'posts', post.id);
+      await updateDoc(docRef, { likes: updatedLikes, likedBy: updatedLikedBy });
     } catch (e) {
-      console.warn("Local update of likes as fallback:");
+      // Mirror to server endpoint
+      fetch(`/api/posts/${post.id}/like`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      }).catch(() => {});
     }
   };
 
-  // 8. Atomic Comments in Firestore
+  // 8. Add comment
   const handleAddComment = async (postId: string) => {
     if (!newCommentText.trim()) return;
+    const authorName = userName || 'Farmer Partner';
+    const commentObj = {
+      id: `comm_${Date.now()}`,
+      author: authorName,
+      content: newCommentText.trim(),
+      time: 'Just now'
+    };
+
+    setPostsList((prev) =>
+      prev.map((p) => (p.id === postId ? { ...p, comments: [...(p.comments || []), commentObj] } : p))
+    );
+
+    setNewCommentText('');
+    triggerVisualToast('Comment added.');
 
     try {
-      const pDoc = doc(db, 'posts', postId);
-      const newComment = {
-        id: `comm_${Date.now()}`,
-        author: userName || "Agri Friend",
-        content: newCommentText,
-        time: 'Just now',
-        createdAt: new Date().toISOString()
-      };
-
-      await updateDoc(pDoc, {
-        comments: arrayUnion(newComment)
-      });
-
-      setNewCommentText('');
-      triggerVisualToast('Comment added 💬');
-    } catch (err: any) {
-      triggerVisualToast('Could not save comment.');
+      fetch(`/api/posts/${postId}/comment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ author: authorName, content: commentObj.content, authorUid: userId })
+      }).catch(() => {});
+    } catch (e) {
+      console.warn('Comment write warning:', e);
     }
   };
 
-  // Bookmark toggler
-  const toggleBookmark = (postId: string) => {
-    let saved = [...bookmarkedPostIds];
-    if (saved.includes(postId)) {
-      saved = saved.filter((id) => id !== postId);
-      triggerVisualToast('Removed from Bookmarks');
-    } else {
-      saved.push(postId);
-      triggerVisualToast('Added to Bookmarks');
-    }
-    setBookmarkedPostIds(saved);
-    localStorage.setItem('agri_saved_posts', JSON.stringify(saved));
-  };
-
-  // Repost handle
-  const handleRepost = (post: Post) => {
-    triggerVisualToast('🔄 Reposted voice note to your profile board!');
-  };
-
-  // Safety report system
-  const handleReportPost = (postId: string) => {
-    setFlaggedPosts((prev) => [...prev, postId]);
-    triggerVisualToast('⚠️ Post flagged for safety review. Blocked from your view.');
-  };
-
-  // Language mapping
   const languageNames: Record<string, string> = {
     kn: 'ಕನ್ನಡ (Kannada)',
+    hi: 'हिंदी (Hindi)',
+    en: 'English',
     ta: 'தமிழ் (Tamil)',
-    hi: 'हिन्दी (Hindi)',
     te: 'తెలుగు (Telugu)',
-    ml: 'മലയാളം (Malayalam)',
-    bn: 'বাংলা (Bengali)',
-    mr: 'मराठी (Marathi)',
-    pa: 'ਪੰਜਾਬੀ (Punjabi)',
-    en: 'English (US)'
+    ml: 'മലയാളം (Malayalam)'
   };
 
   return (
-    <div className="space-y-4 pb-20">
-      
+    <div className="space-y-4 pb-20 animate-fadeIn">
       {/* 🚀 STEP 1: VOICE NOTE RECORDING CONSOLE */}
-      <div className="bg-white rounded-3xl border border-emerald-500/10 shadow-lg p-5 space-y-4">
-        <div className="flex items-center justify-between border-b pb-3 border-slate-50">
-          <div className="flex items-center space-x-2">
-            <div className="w-9 h-9 rounded-full bg-emerald-50 text-emerald-700 flex items-center justify-center">
-              <Mic className="w-5 h-5 animate-pulse" />
+      <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm p-4 sm:p-5 space-y-4">
+        <div className="flex items-center justify-between border-b pb-3 border-slate-100">
+          <div className="flex items-center space-x-2.5">
+            <div className="w-9 h-9 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+              <Mic className="w-5 h-5 text-emerald-600" />
             </div>
             <div>
-              <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider">🎙️ Voice Updates Recorder</h4>
-              <p className="text-[10px] text-slate-400 font-bold">Broadcast sound concerns instantly</p>
+              <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">Voice Community Hub</h3>
+              <p className="text-[10px] text-slate-400 font-bold">Record and share voice updates with farmers</p>
             </div>
           </div>
-          <span className="text-[9px] font-black bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full uppercase">
-            WhatsApp Simple
+          <span className="text-[9px] font-black bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+            VOICE COMMUNITY
           </span>
         </div>
 
@@ -569,10 +598,13 @@ export function VoicePostsSystem({
         <div className="bg-slate-50 p-4 rounded-2xl flex flex-col items-center justify-center space-y-3 border border-slate-100">
           {recorderState === 'idle' && !previewBlobUrl && (
             <div className="text-center py-4 space-y-3">
-              <p className="text-xs font-semibold text-slate-500">Press red mic button to start recording crop audio</p>
+              <p className="text-xs font-semibold text-slate-600">
+                Tap the microphone button to start recording your farming update
+              </p>
               <button
                 onClick={startRecordingFlow}
-                className="w-16 h-16 bg-red-500 hover:bg-red-650 rounded-full flex items-center justify-center text-white shadow-lg shadow-red-200 hover:scale-105 active:scale-95 transition-all cursor-pointer"
+                className="w-16 h-16 bg-emerald-600 hover:bg-emerald-700 active:scale-95 rounded-full flex items-center justify-center text-white shadow-lg shadow-emerald-200 transition-all cursor-pointer mx-auto"
+                title="Start Recording"
               >
                 <Mic className="w-8 h-8" />
               </button>
@@ -584,12 +616,12 @@ export function VoicePostsSystem({
             <div className="text-center w-full space-y-4 py-2">
               <div className="flex items-center justify-center space-x-2">
                 <span className="w-3 h-3 bg-red-600 rounded-full animate-ping"></span>
-                <span className="text-lg font-mono font-black text-slate-800">
+                <span className="text-xl font-mono font-black text-slate-800">
                   {Math.floor(voiceRecordDuration / 60).toString().padStart(2, '0')}:
                   {(voiceRecordDuration % 60).toString().padStart(2, '0')}
                 </span>
-                <span className="text-[10px] font-black uppercase text-red-500 tracking-widest pl-2">
-                  {recorderState === 'recording' ? '🔴 Recording' : '⏸️ Paused'}
+                <span className="text-[10px] font-black uppercase text-red-600 tracking-wider pl-2">
+                  {recorderState === 'recording' ? 'Recording' : 'Paused'}
                 </span>
               </div>
 
@@ -598,7 +630,7 @@ export function VoicePostsSystem({
                 {recorderState === 'recording' ? (
                   <button
                     onClick={pauseRecordingFlow}
-                    className="p-3 bg-slate-200 hover:bg-slate-350 rounded-full text-slate-700 outline-none hover:scale-105 transition-all cursor-pointer"
+                    className="p-3 bg-slate-200 hover:bg-slate-300 rounded-full text-slate-700 transition-all cursor-pointer"
                     title="Pause"
                   >
                     <Pause className="w-5 h-5" />
@@ -606,7 +638,7 @@ export function VoicePostsSystem({
                 ) : (
                   <button
                     onClick={resumeRecordingFlow}
-                    className="p-3 bg-emerald-550 hover:bg-emerald-600 text-white rounded-full hover:scale-105 transition-all cursor-pointer"
+                    className="p-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full transition-all cursor-pointer"
                     title="Resume"
                   >
                     <Play className="w-5 h-5" />
@@ -615,10 +647,10 @@ export function VoicePostsSystem({
 
                 <button
                   onClick={stopRecordingFlow}
-                  className="px-6 py-3 bg-red-600 hover:bg-red-705 text-white font-black text-xs uppercase rounded-full shadow-md animate-bounce cursor-pointer flex items-center space-x-1"
+                  className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-black text-xs uppercase rounded-full shadow-md cursor-pointer flex items-center space-x-1.5 transition-all active:scale-95"
                 >
                   <MicOff className="w-4 h-4" />
-                  <span>Stop & Render</span>
+                  <span>Stop Recording</span>
                 </button>
               </div>
             </div>
@@ -626,34 +658,41 @@ export function VoicePostsSystem({
 
           {/* Audio preview state before publishing */}
           {previewBlobUrl && (
-            <div className="w-full space-y-4">
-              <div className="flex justify-between items-center bg-indigo-50/50 p-2.5 rounded-xl border border-indigo-100">
+            <div className="w-full space-y-3.5">
+              <div className="flex justify-between items-center bg-emerald-50/70 p-2.5 rounded-xl border border-emerald-100">
                 <div className="flex items-center space-x-2">
-                  <Volume2 className="text-indigo-600 w-4 h-4" />
-                  <span className="text-[10px] text-indigo-950 font-extrabold">▶️ Preview Audio ({voiceRecordDuration}s Recorded)</span>
+                  <Volume2 className="text-emerald-700 w-4 h-4" />
+                  <span className="text-[11px] text-emerald-950 font-extrabold">
+                    Audio Preview ({voiceRecordDuration}s Recorded)
+                  </span>
                 </div>
                 <button
                   onClick={deleteRecordingFlow}
-                  className="text-red-500 hover:text-red-700 text-[10px] font-black uppercase flex items-center space-x-0.5"
+                  className="text-red-500 hover:text-red-700 text-[10px] font-black uppercase flex items-center space-x-1 cursor-pointer"
+                  title="Discard recording"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Delete</span>
+                  <span>Re-record</span>
                 </button>
               </div>
 
-              <audio src={previewBlobUrl} controls className="w-full h-8 bg-white rounded-full shadow-inner text-indigo-900" />
+              <audio src={previewBlobUrl} controls className="w-full h-9 bg-white rounded-full text-emerald-900" />
 
-              {/* Language selection for transcript helper */}
+              {/* Language selection & Optional Auto-caption */}
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div>
-                  <label className="text-[9px] text-slate-400 font-extrabold uppercase">Audio Spoken Language</label>
+                  <label className="text-[9px] text-slate-400 font-extrabold uppercase block mb-1">
+                    Spoken Language
+                  </label>
                   <select
                     value={selectedVoiceLanguage}
                     onChange={(e) => setSelectedVoiceLanguage(e.target.value)}
-                    className="w-full bg-white border border-slate-200 outline-none p-2 rounded-xl text-slate-800 font-bold"
+                    className="w-full bg-white border border-slate-200 outline-none p-2 rounded-xl text-slate-800 font-bold text-xs"
                   >
                     {Object.entries(languageNames).map(([code, name]) => (
-                      <option key={code} value={code}>{name}</option>
+                      <option key={code} value={code}>
+                        {name}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -661,56 +700,62 @@ export function VoicePostsSystem({
                   <button
                     onClick={extractAICaptions}
                     disabled={isCapturingAI}
-                    className="w-full p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold flex items-center justify-center space-x-1 shadow-md hover:scale-[1.02] active:scale-95 transition-all text-xs cursor-pointer disabled:opacity-50"
+                    className="w-full p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold flex items-center justify-center space-x-1 shadow-sm transition-all text-xs cursor-pointer disabled:opacity-50"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
-                    <span>{isCapturingAI ? 'AI Analyzing...' : 'Gemini Auto-Caption'}</span>
+                    <span>{isCapturingAI ? 'Transcribing...' : 'Auto-Caption (Gemini)'}</span>
                   </button>
                 </div>
               </div>
 
-              {/* Auto Caption Editor display */}
+              {/* Short Title / Note */}
               <div className="space-y-1">
-                <label className="text-[9px] text-slate-400 font-extrabold uppercase">Voice Note Headline / Title (Text)</label>
+                <label className="text-[9px] text-slate-400 font-extrabold uppercase block">
+                  Short Title / Note (Topic)
+                </label>
                 <input
                   type="text"
-                  value={textCaption}
-                  onChange={(e) => setTextCaption(e.target.value)}
-                  placeholder="Summarize or add custom tag notes e.g., Brown rust warning..."
-                  className="w-full bg-white border border-slate-200 p-2.5 rounded-xl text-xs font-semibold outline-none"
+                  value={textTitle}
+                  onChange={(e) => setTextTitle(e.target.value)}
+                  placeholder="e.g. Tomato leaf curl advisory, Mandi price update..."
+                  className="w-full bg-white border border-slate-200 p-2.5 rounded-xl text-xs font-semibold outline-none text-slate-800 focus:border-emerald-500"
                 />
               </div>
 
               {/* AI result visualization previews if extracted */}
               {aiCaptionsResult && (
-                <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-3 rounded-2xl border border-indigo-100 space-y-2 text-xs">
-                  <h5 className="font-extrabold text-indigo-950 flex items-center space-x-1">
-                    <Sparkles className="w-3.5 h-3.5 text-purple-650 animate-pulse" />
-                    <span>Gemini Multi-Layer Insights:</span>
+                <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-3 rounded-2xl border border-indigo-100 space-y-1.5 text-xs">
+                  <h5 className="font-extrabold text-indigo-950 flex items-center space-x-1 text-[11px]">
+                    <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                    <span>Gemini Auto-Caption Summary</span>
                   </h5>
                   <div className="space-y-1 text-[11px] text-slate-700 leading-normal">
-                    <p>🇮🇳 <strong className="text-slate-800">Transcript:</strong> {aiCaptionsResult.transcription}</p>
-                    <p>🌐 <strong className="text-slate-800">Translation (EN):</strong> {aiCaptionsResult.translation}</p>
-                    <p>💡 <strong className="text-indigo-800 font-extrabold">Advice Summary:</strong> {aiCaptionsResult.summary}</p>
+                    <p>
+                      <strong>Transcript:</strong> {aiCaptionsResult.transcription}
+                    </p>
+                    {aiCaptionsResult.translation && (
+                      <p>
+                        <strong>English:</strong> {aiCaptionsResult.translation}
+                      </p>
+                    )}
                   </div>
                 </div>
               )}
 
-              {/* Publishing metadata options */}
-              <div className="grid grid-cols-3 gap-2 bg-slate-100 p-2.5 rounded-2xl text-[10px] font-bold text-slate-600">
+              {/* Location & Crop Tag Controls */}
+              <div className="grid grid-cols-3 gap-2 bg-slate-100 p-2.5 rounded-2xl text-[10px] font-bold text-slate-700">
                 <div className="flex flex-col">
                   <span className="text-[8px] text-slate-400 uppercase">District</span>
                   <select
                     value={selectedPostDistrict}
                     onChange={(e) => setSelectedPostDistrict(e.target.value)}
-                    className="bg-transparent font-black text-slate-800 outline-none cursor-pointer"
+                    className="bg-transparent font-black text-slate-800 outline-none cursor-pointer text-xs"
                   >
-                    <option value="Chikkaballapura">Chikkaballapura</option>
-                    <option value="Dharwad">Dharwad</option>
-                    <option value="Kolar">Kolar</option>
-                    <option value="Mandya">Mandya</option>
-                    <option value="Raichur">Raichur</option>
-                    <option value="Koppal">Koppal</option>
+                    {KARNATAKA_DISTRICTS.map((dist) => (
+                      <option key={dist} value={dist}>
+                        {dist}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div className="flex flex-col">
@@ -719,30 +764,43 @@ export function VoicePostsSystem({
                     type="text"
                     value={selectedPostVillage}
                     onChange={(e) => setSelectedPostVillage(e.target.value)}
-                    className="bg-transparent font-black text-slate-800 focus:bg-white px-1 rounded border-none outline-none"
+                    placeholder="Village name"
+                    className="bg-transparent font-black text-slate-800 focus:bg-white px-1 py-0.5 rounded border-none outline-none text-xs"
                   />
                 </div>
                 <div className="flex flex-col">
                   <span className="text-[8px] text-slate-400 uppercase">Crop Tag</span>
                   <select
-                    value={selectedCategory}
-                    onChange={(e) => setSelectedCategory(e.target.value)}
-                    className="bg-transparent font-black text-slate-800 outline-none cursor-pointer"
+                    value={selectedCropTag}
+                    onChange={(e) => setSelectedCropTag(e.target.value)}
+                    className="bg-transparent font-black text-slate-800 outline-none cursor-pointer text-xs"
                   >
-                    <option value="general">💬 General</option>
-                    <option value="disease">🐛 Pests</option>
-                    <option value="weather">⛈️ Weather</option>
-                    <option value="crop_update">🌾 Yield/Mandi</option>
+                    {CROP_TAGS.map((crop) => (
+                      <option key={crop.value} value={crop.value}>
+                        {crop.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
 
-              {/* Final Broadcast trigger button */}
+              {/* Publish Voice Update Button */}
               <button
                 onClick={publishVoicePost}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-emerald-100 hover:scale-[1.01] transition-all cursor-pointer select-none"
+                disabled={isPublishing}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-md transition-all cursor-pointer flex items-center justify-center space-x-1.5 disabled:opacity-60"
               >
-                🌾 Broadcast Sound Post to Forums
+                {isPublishing ? (
+                  <>
+                    <RotateCcw className="w-4 h-4 animate-spin text-white" />
+                    <span>Publishing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Volume2 className="w-4 h-4 text-emerald-200" />
+                    <span>Publish Voice Update</span>
+                  </>
+                )}
               </button>
             </div>
           )}
@@ -750,218 +808,179 @@ export function VoicePostsSystem({
       </div>
 
       {/* 🚀 STEP 2: VOICE BROADCAST FEED CHANNELS */}
-      <div className="space-y-3.5">
-        <h4 className="text-xs font-black uppercase text-slate-500 tracking-wider flex items-center space-x-1 pl-1">
+      <div className="space-y-3">
+        <h4 className="text-xs font-black uppercase text-slate-500 tracking-wider flex items-center space-x-1.5 pl-1">
           <Volume2 className="w-4 h-4 text-emerald-600" />
-          <span>Active Regional Broadcasts ({postsList.length})</span>
+          <span>Regional Voice Updates ({postsList.filter((p) => p.voiceUrl).length})</span>
         </h4>
 
         {loading ? (
-          <div className="text-center py-10 bg-white rounded-3xl border border-slate-50 p-6">
+          <div className="text-center py-10 bg-white rounded-3xl border border-slate-100 p-6">
             <div className="animate-spin w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-            <p className="text-xs text-slate-500 font-bold">Synchronizing real voice notes from Karnataka villages...</p>
+            <p className="text-xs text-slate-500 font-bold">Loading community voice updates...</p>
           </div>
-        ) : postsList.length === 0 ? (
-          <div className="bg-white p-8 rounded-3xl border text-center text-slate-400 text-xs font-semibold">
-            No voice broadcasts shared in this hub yet. Start recording first.
+        ) : postsList.filter((p) => p.voiceUrl).length === 0 ? (
+          <div className="bg-white p-8 rounded-3xl border border-slate-100 text-center text-slate-400 text-xs font-semibold">
+            No voice updates shared yet. Record and publish the first update above! 🎙️
           </div>
         ) : (
           <div className="space-y-3">
             {postsList
-              .filter((post) => !flaggedPosts.includes(post.id))
+              .filter((post) => post.voiceUrl && !flaggedPosts.includes(post.id))
               .map((post) => {
                 const isLiked = post.likedBy?.includes(userId);
-                const isBookmarked = bookmarkedPostIds.includes(post.id);
 
                 return (
                   <div
                     key={post.id}
-                    className="bg-white rounded-3xl border border-slate-100 shadow-md p-4 space-y-3 animate-fadeIn relative"
+                    className="bg-white rounded-3xl border border-slate-100 shadow-sm p-4 space-y-3 animate-fadeIn"
                   >
-                    {/* Geotags strip tagger */}
-                    <div className="flex justify-between items-center text-[9px] font-black tracking-wider uppercase text-emerald-600">
-                      <div className="flex items-center space-x-1 bg-emerald-50 px-2.5 py-0.5 rounded-full">
-                        <span>📍 {post.district} 🌾 {post.village}</span>
-                      </div>
-                      <span className="bg-slate-100 text-slate-600 px-2.5 py-0.5 rounded-full">
-                        {post.category === 'disease' ? '🐛 Pests / Diagnosis' : post.category === 'weather' ? '⛈️ Weather Update' : '💬 General Advice'}
-                      </span>
-                    </div>
-
                     {/* Header info */}
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-2">
-                        <div className="w-9 h-9 rounded-full bg-emerald-50 border-2 border-emerald-100 text-slate-800 flex items-center justify-center font-black text-xs">
-                          {post.author[0]}
+                      <div className="flex items-center space-x-2.5">
+                        <div className="w-9 h-9 rounded-2xl bg-emerald-50 border border-emerald-100 text-emerald-800 flex items-center justify-center font-black text-xs shrink-0">
+                          {(post.author || 'F')[0].toUpperCase()}
                         </div>
                         <div>
-                          <div className="flex items-center space-x-1">
+                          <div className="flex items-center space-x-1.5">
                             <p className="text-xs font-bold text-slate-800">{post.author}</p>
                             {post.isVerified && <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 fill-emerald-100" />}
                           </div>
-                          <div className="flex items-center space-x-1 text-[8px] text-slate-400 font-bold">
-                            <Clock className="w-2.5 h-2.5" />
-                            <span>{post.time || 'Shared recently'}</span>
+                          <div className="flex items-center space-x-2 text-[9px] text-slate-400 font-bold">
+                            <span className="flex items-center space-x-0.5">
+                              <MapPin className="w-2.5 h-2.5" />
+                              <span>
+                                {post.district}
+                                {post.village ? ` • ${post.village}` : ''}
+                              </span>
+                            </span>
+                            <span>•</span>
+                            <span className="flex items-center space-x-0.5">
+                              <Clock className="w-2.5 h-2.5" />
+                              <span>{post.time || 'Recently'}</span>
+                            </span>
                           </div>
                         </div>
                       </div>
 
-                      {/* Dropdown Options or Report element */}
-                      <button
-                        onClick={() => handleReportPost(post.id)}
-                        className="text-slate-300 hover:text-red-500 transition-all"
-                        title="Report/Block Spam"
-                      >
-                        <Flag className="w-4 h-4" />
-                      </button>
+                      {/* Crop Tag Pill */}
+                      {post.crop && (
+                        <span className="bg-emerald-50 text-emerald-800 text-[9px] font-black px-2.5 py-0.5 rounded-full border border-emerald-200">
+                          🌾 {post.crop}
+                        </span>
+                      )}
                     </div>
+
+                    {/* Title / Note */}
+                    {post.title && (
+                      <h4 className="text-xs font-extrabold text-slate-900 leading-snug">
+                        {post.title}
+                      </h4>
+                    )}
 
                     {/* Integrated audio track player */}
                     {post.voiceUrl && (
-                      <div className="bg-indigo-50/40 border border-indigo-500/5 rounded-2xl p-3 flex items-center space-x-3.5">
+                      <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 flex items-center space-x-3">
                         <button
                           onClick={() => handleTogglePlayback(post.id, post.voiceUrl!)}
-                          className="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-md shadow-emerald-150 transform hover:scale-110 active:scale-95 transition-all outline-none cursor-pointer"
+                          className="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-sm shrink-0 hover:bg-emerald-700 active:scale-95 transition-all outline-none cursor-pointer"
                         >
-                          {playingPostId === post.id ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 text-emerald-100 fill-white ml-0.5" />}
+                          {playingPostId === post.id ? (
+                            <Pause className="w-4 h-4" />
+                          ) : (
+                            <Play className="w-4 h-4 ml-0.5 fill-current" />
+                          )}
                         </button>
 
-                        <div className="flex-1 space-y-1">
-                          {/* Animated fake waveform reflecting progress */}
-                          <div className="flex items-end space-x-0.5 h-6">
-                            {Array.from({ length: 24 }).map((_, i) => {
-                              const currProgress = audioPlaybackProgress[post.id] || 0;
-                              const maxProgress = audioPlaybackDuration[post.id] || 10;
-                              const ratio = currProgress / maxProgress;
-                              const isActive = (i / 24) <= ratio && playingPostId === post.id;
-
-                              // Sinusoid structure shape
-                              const seedH = 4 + Math.sin(i * 0.4) * 14 + (i % 2 === 0 ? 4 : -2);
-                              const heightCss = Math.max(4, Math.min(22, seedH));
-
-                              return (
-                                <span
-                                  key={i}
-                                  className={`flex-1 rounded-full transition-all duration-300 ${
-                                    isActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-200'
-                                  }`}
-                                  style={{ height: `${heightCss}px` }}
-                                ></span>
-                              );
-                            })}
+                        <div className="flex-1 space-y-1 min-w-0">
+                          <div className="flex justify-between items-center text-[9px] font-bold text-slate-500">
+                            <span>🎙️ Audio Note ({post.voiceLang?.toUpperCase() || 'Audio'})</span>
+                            <span className="font-mono">
+                              {Math.floor((audioPlaybackProgress[post.id] || 0) % 60).toString().padStart(2, '0')}s /{' '}
+                              {post.voiceDuration ? `${post.voiceDuration}s` : '00:15s'}
+                            </span>
                           </div>
 
-                          <div className="flex justify-between items-center text-[8px] font-mono font-bold text-slate-400 uppercase">
-                            <span>🎙️ Broadcast note {post.voiceLang?.toUpperCase()}</span>
-                            <span>
-                              {Math.floor((audioPlaybackProgress[post.id] || 0) % 60).toString().padStart(2, '0')}s /{' '}
-                              {Math.floor((audioPlaybackDuration[post.id] || 8) % 60).toString().padStart(2, '0')}s
-                            </span>
+                          {/* Progress bar */}
+                          <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+                            <div
+                              className="bg-emerald-600 h-full rounded-full transition-all"
+                              style={{
+                                width: `${
+                                  audioPlaybackDuration[post.id]
+                                    ? Math.min(
+                                        100,
+                                        ((audioPlaybackProgress[post.id] || 0) / audioPlaybackDuration[post.id]) * 100
+                                      )
+                                    : 0
+                                }%`
+                              }}
+                            />
                           </div>
                         </div>
                       </div>
                     )}
 
-                    {/* Content text preview */}
-                    <div className="text-xs text-slate-700 leading-normal font-semibold">
-                      {post.content}
-                    </div>
+                    {/* Caption / Transcript */}
+                    {post.voiceCaption && post.voiceCaption !== post.title && (
+                      <p className="text-[11px] text-slate-600 font-medium italic bg-slate-50/70 p-2.5 rounded-xl border border-slate-100">
+                        "{post.voiceCaption}"
+                      </p>
+                    )}
 
-                    {/* Multi captions tabs panel */}
-                    <div className="bg-slate-50 rounded-2xl border border-slate-50/50 p-3 space-y-2">
-                      <div className="flex bg-slate-200/50 rounded-lg p-0.5 text-[9px] font-bold gap-1 text-slate-500">
-                        <span className="flex-1 text-center bg-white text-slate-800 rounded py-0.5 shadow-sm">
-                          📝 Original ({post.voiceLang?.toUpperCase()})
-                        </span>
-                        <span className="flex-1 text-center py-0.5">
-                          🌐 English
-                        </span>
-                        <span className="flex-1 text-center py-0.5">
-                          💡 AI Advice
-                        </span>
-                      </div>
-                      
-                      <div className="text-xs text-slate-800 leading-relaxed pl-1 font-semibold">
-                        <p className="text-indigo-950 font-medium">🗣️ {post.voiceCaption || 'No transcription caption present.'}</p>
-                        {post.voiceTranslation && (
-                          <p className="text-slate-500 border-t pt-1.5 mt-1.5 text-[11px] leading-normal flex items-start space-x-1">
-                            <Globe className="w-3.5 h-3.5 text-slate-450 shrink-0 mt-0.5" />
-                            <span>English: "{post.voiceTranslation}"</span>
-                          </p>
-                        )}
-                        {post.voiceSummary && (
-                          <p className="text-emerald-700 bg-emerald-50 border border-emerald-500/10 p-1.5 rounded-xl text-[10px] leading-normal mt-2 flex items-start space-x-1.5 font-bold">
-                            <Sparkles className="w-3.5 h-3.5 text-emerald-550 shrink-0 animate-pulse mt-0.5" />
-                            <span>AI Agricultural Advice: {post.voiceSummary}</span>
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Bottom engagement row bar */}
-                    <div className="flex items-center justify-between text-slate-500 text-[10px] uppercase font-bold pt-1.5 border-t border-slate-50">
+                    {/* Bottom engagement row bar (Clean: Like & Comments only, NO fake stats) */}
+                    <div className="flex items-center justify-between text-slate-500 text-[10px] uppercase font-bold pt-2 border-t border-slate-100">
                       <button
                         onClick={() => toggleLikePost(post)}
-                        className={`flex items-center space-x-1 hover:text-red-500 ${isLiked ? 'text-red-500' : ''}`}
+                        className={`flex items-center space-x-1.5 hover:text-red-500 cursor-pointer ${
+                          isLiked ? 'text-red-500' : ''
+                        }`}
                       >
-                        <Heart className={`w-4 h-4 ${isLiked ? 'fill-red-500 text-red-500' : ''}`} />
+                        <Heart className={`w-3.5 h-3.5 ${isLiked ? 'fill-red-500 text-red-500' : ''}`} />
                         <span>{post.likes || 0} Likes</span>
                       </button>
 
                       <button
                         onClick={() => setActiveCommentPostId((prev) => (prev === post.id ? null : post.id))}
-                        className={`flex items-center space-x-1 hover:text-emerald-600 ${activeCommentPostId === post.id ? 'text-emerald-600' : ''}`}
+                        className={`flex items-center space-x-1.5 hover:text-emerald-700 cursor-pointer ${
+                          activeCommentPostId === post.id ? 'text-emerald-700' : ''
+                        }`}
                       >
-                        <MessageSquare className="w-4 h-4" />
+                        <MessageSquare className="w-3.5 h-3.5" />
                         <span>{post.comments?.length || 0} Comments</span>
-                      </button>
-
-                      <button
-                        onClick={() => toggleBookmark(post.id)}
-                        className={`hover:text-amber-500 ${isBookmarked ? 'text-amber-500' : ''}`}
-                      >
-                        <Bookmark className={`w-4 h-4 ${isBookmarked ? 'fill-amber-500 text-amber-500' : ''}`} />
-                      </button>
-
-                      <button
-                        onClick={() => handleRepost(post)}
-                        className="flex items-center space-x-1 hover:text-blue-500"
-                        title="Repost on your timeline"
-                      >
-                        <Share2 className="w-4 h-4" />
-                        <span>Repost</span>
                       </button>
                     </div>
 
-                    {/* Nested comments thread drawer inside feed card */}
+                    {/* Comments drawer */}
                     {activeCommentPostId === post.id && (
-                      <div className="border-t pt-3 mt-3 space-y-3 animate-slideDown">
-                        <div className="space-y-2 max-h-40 overflow-y-auto scrollbar-none pr-1">
-                          {post.comments?.map((comment, index) => (
-                            <div key={comment.id || index} className="bg-slate-50 p-2 rounded-2xl flex flex-col space-y-0.5 border">
-                              <div className="flex justify-between items-center text-[9px] font-black text-slate-550">
-                                <span>💬 {comment.author}</span>
-                                <span>{comment.time || 'Recently'}</span>
+                      <div className="border-t border-slate-100 pt-3 space-y-2.5 animate-fadeIn">
+                        <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                          {(!post.comments || post.comments.length === 0) ? (
+                            <p className="text-[10px] text-slate-400 font-medium py-1">No comments yet. Be the first to reply!</p>
+                          ) : (
+                            post.comments.map((comment, index) => (
+                              <div key={comment.id || index} className="bg-slate-50 p-2 rounded-xl text-[10px]">
+                                <div className="flex justify-between font-bold text-slate-700">
+                                  <span>{comment.author}</span>
+                                  <span className="text-[8px] text-slate-400">{comment.time || 'Recently'}</span>
+                                </div>
+                                <p className="text-slate-600 mt-0.5">{comment.content}</p>
                               </div>
-                              <p className="text-xs text-slate-700 leading-normal font-semibold pl-1">
-                                {comment.content}
-                              </p>
-                            </div>
-                          ))}
+                            ))
+                          )}
                         </div>
 
-                        {/* Add comment dialog form */}
                         <div className="flex space-x-2">
                           <input
                             type="text"
                             value={newCommentText}
                             onChange={(e) => setNewCommentText(e.target.value)}
-                            placeholder="Add local farming reply..."
-                            className="flex-1 bg-slate-55 border text-xs p-2.5 rounded-2xl focus:bg-white outline-none"
+                            placeholder="Add a reply..."
+                            className="flex-1 bg-slate-50 border text-xs p-2 rounded-xl focus:bg-white outline-none"
                           />
                           <button
                             onClick={() => handleAddComment(post.id)}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 font-black text-xs uppercase rounded-2xl cursor-pointer"
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 font-bold text-xs rounded-xl cursor-pointer"
                           >
                             Send
                           </button>
@@ -974,7 +993,6 @@ export function VoicePostsSystem({
           </div>
         )}
       </div>
-
     </div>
   );
 }

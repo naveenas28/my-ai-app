@@ -472,7 +472,7 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
 
   return (
     <div id="v_community_page" className="p-3.5 space-y-4 animate-fadeIn max-w-xl mx-auto w-full pb-24 text-slate-800">
-      
+
       {/* 1. HEADER */}
       <header id="community_header" className="bg-white rounded-2xl border border-slate-100 p-3.5 shadow-xs flex items-center justify-between relative z-20">
         <div>
@@ -492,11 +492,10 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
               setShowSearchInput(!showSearchInput);
               if (showSearchInput) setSearchQuery('');
             }}
-            className={`p-2 rounded-xl border transition-all cursor-pointer ${
-              showSearchInput || searchQuery 
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
+            className={`p-2 rounded-xl border transition-all cursor-pointer ${showSearchInput || searchQuery
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                 : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200/80'
-            }`}
+              }`}
             title="Search posts"
           >
             <Search className="w-4 h-4" />
@@ -550,11 +549,10 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
                     if (!item.read) markNotificationAsRead(item.id);
                     if (item.type === 'voice') setCommunitySubTab('voice');
                   }}
-                  className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
-                    item.read
+                  className={`p-2.5 rounded-xl border transition-all cursor-pointer ${item.read
                       ? 'bg-white/80 border-emerald-100 text-slate-700'
                       : 'bg-white border-emerald-300 shadow-2xs text-slate-900 font-bold'
-                  }`}
+                    }`}
                 >
                   <div className="flex justify-between items-center text-[10px]">
                     <span className="font-extrabold text-emerald-800 flex items-center space-x-1">
@@ -599,11 +597,10 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
       <div className="flex bg-slate-100 p-1 rounded-2xl gap-1 border border-slate-200/80">
         <button
           onClick={() => setCommunitySubTab('feed')}
-          className={`flex-1 text-center py-2 text-xs font-black rounded-xl transition-all flex items-center justify-center space-x-1 cursor-pointer ${
-            communitySubTab === 'feed'
+          className={`flex-1 text-center py-2 text-xs font-black rounded-xl transition-all flex items-center justify-center space-x-1 cursor-pointer ${communitySubTab === 'feed'
               ? 'bg-emerald-700 text-white shadow-xs'
               : 'text-slate-600 hover:text-slate-900'
-          }`}
+            }`}
         >
           <span>🚀 Feed</span>
         </button>
@@ -612,11 +609,10 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
             setCommunitySubTab('voice');
             triggerToast('Opened Voice Hub 🎙️');
           }}
-          className={`flex-1 text-center py-2 text-xs font-black rounded-xl transition-all flex items-center justify-center space-x-1 cursor-pointer ${
-            communitySubTab === 'voice'
+          className={`flex-1 text-center py-2 text-xs font-black rounded-xl transition-all flex items-center justify-center space-x-1 cursor-pointer ${communitySubTab === 'voice'
               ? 'bg-emerald-700 text-white shadow-xs'
               : 'text-slate-600 hover:text-slate-900'
-          }`}
+            }`}
         >
           <span>🎙️ Voice Hub</span>
         </button>
@@ -625,11 +621,10 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
             setCommunitySubTab('chat');
             triggerToast('Opened Peer Farmer Chat 💬');
           }}
-          className={`flex-1 text-center py-2 text-xs font-black rounded-xl transition-all flex items-center justify-center space-x-1 cursor-pointer ${
-            communitySubTab === 'chat'
+          className={`flex-1 text-center py-2 text-xs font-black rounded-xl transition-all flex items-center justify-center space-x-1 cursor-pointer ${communitySubTab === 'chat'
               ? 'bg-emerald-700 text-white shadow-xs'
               : 'text-slate-600 hover:text-slate-900'
-          }`}
+            }`}
         >
           <span>💬 Farmer Chat</span>
         </button>
@@ -769,11 +764,10 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
                       setCategoryFilter(cat.id);
                       triggerToast(`Filtered by ${cat.label}`);
                     }}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap cursor-pointer transition-all shrink-0 flex items-center space-x-1.5 border ${
-                      isActive
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap cursor-pointer transition-all shrink-0 flex items-center space-x-1.5 border ${isActive
                         ? 'bg-emerald-800 text-white border-emerald-800 shadow-xs'
                         : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-200/80'
-                    }`}
+                      }`}
                   >
                     <span>{cat.icon}</span>
                     <span>{cat.label}</span>
@@ -944,25 +938,22 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
               <div className="flex bg-slate-100 p-0.5 rounded-xl border border-slate-200/60 w-full sm:w-auto">
                 <button
                   onClick={() => setCommunityTab('all')}
-                  className={`flex-1 sm:flex-initial px-3 py-1 text-[10px] font-extrabold rounded-lg transition-all ${
-                    communityTab === 'all' ? 'bg-white text-slate-800 shadow-2xs' : 'text-slate-500'
-                  }`}
+                  className={`flex-1 sm:flex-initial px-3 py-1 text-[10px] font-extrabold rounded-lg transition-all ${communityTab === 'all' ? 'bg-white text-slate-800 shadow-2xs' : 'text-slate-500'
+                    }`}
                 >
                   All
                 </button>
                 <button
                   onClick={() => setCommunityTab('saved')}
-                  className={`flex-1 sm:flex-initial px-3 py-1 text-[10px] font-extrabold rounded-lg transition-all ${
-                    communityTab === 'saved' ? 'bg-white text-slate-800 shadow-2xs' : 'text-slate-500'
-                  }`}
+                  className={`flex-1 sm:flex-initial px-3 py-1 text-[10px] font-extrabold rounded-lg transition-all ${communityTab === 'saved' ? 'bg-white text-slate-800 shadow-2xs' : 'text-slate-500'
+                    }`}
                 >
                   Saved ({savedPostIds.length})
                 </button>
                 <button
                   onClick={() => setCommunityTab('trending')}
-                  className={`flex-1 sm:flex-initial px-3 py-1 text-[10px] font-extrabold rounded-lg transition-all ${
-                    communityTab === 'trending' ? 'bg-white text-slate-800 shadow-2xs' : 'text-slate-500'
-                  }`}
+                  className={`flex-1 sm:flex-initial px-3 py-1 text-[10px] font-extrabold rounded-lg transition-all ${communityTab === 'trending' ? 'bg-white text-slate-800 shadow-2xs' : 'text-slate-500'
+                    }`}
                 >
                   Trending
                 </button>
@@ -1224,13 +1215,12 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
                         startVoiceRecording();
                       }
                     }}
-                    className={`p-2 rounded-xl flex items-center space-x-1 text-[10px] font-bold border transition-all cursor-pointer ${
-                      isRecordingVoicePost 
+                    className={`p-2 rounded-xl flex items-center space-x-1 text-[10px] font-bold border transition-all cursor-pointer ${isRecordingVoicePost
                         ? 'bg-red-50 text-red-700 border-red-200 animate-pulse'
-                        : voicePostBase64 
+                        : voicePostBase64
                           ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
                           : 'hover:bg-slate-50 text-slate-500 border-slate-200'
-                    }`}
+                      }`}
                   >
                     <Mic className={`w-4 h-4 ${isRecordingVoicePost ? 'text-red-600' : 'text-indigo-600'}`} />
                     <span>{isRecordingVoicePost ? 'Recording...' : 'Voice'}</span>
@@ -1300,9 +1290,8 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
                 return (
                   <div
                     key={post.id}
-                    className={`bg-white rounded-3xl border shadow-xs p-4 space-y-3 transition-all ${
-                      isFollowing ? 'border-amber-200 ring-2 ring-amber-100/40' : 'border-slate-100 hover:border-slate-200'
-                    }`}
+                    className={`bg-white rounded-3xl border shadow-xs p-4 space-y-3 transition-all ${isFollowing ? 'border-amber-200 ring-2 ring-amber-100/40' : 'border-slate-100 hover:border-slate-200'
+                      }`}
                   >
                     {/* Post Header: Farmer Info & Topic */}
                     <div className="flex items-center justify-between">
@@ -1335,11 +1324,10 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
                         {/* Follow Button */}
                         <button
                           onClick={() => handleToggleFollowFarmer(post.author)}
-                          className={`text-[9px] font-black uppercase px-2 py-1 rounded-xl border transition-all cursor-pointer ${
-                            isFollowing
+                          className={`text-[9px] font-black uppercase px-2 py-1 rounded-xl border transition-all cursor-pointer ${isFollowing
                               ? 'bg-amber-50 text-amber-800 border-amber-200'
                               : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                          }`}
+                            }`}
                         >
                           {isFollowing ? '✓ Connected' : '+ Connect'}
                         </button>
@@ -1411,25 +1399,22 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
                       <div className="flex space-x-1">
                         <button
                           onClick={() => handleTranslatePost(post.id, currentLang)}
-                          className={`px-2 py-0.5 rounded-lg bg-white border cursor-pointer ${
-                            loadingAiField[`${post.id}_translate`] ? 'animate-pulse text-indigo-600' : 'hover:bg-slate-100 text-slate-600'
-                          }`}
+                          className={`px-2 py-0.5 rounded-lg bg-white border cursor-pointer ${loadingAiField[`${post.id}_translate`] ? 'animate-pulse text-indigo-600' : 'hover:bg-slate-100 text-slate-600'
+                            }`}
                         >
                           🌍 Translate
                         </button>
                         <button
                           onClick={() => handleSummarizePost(post.id, currentLang)}
-                          className={`px-2 py-0.5 rounded-lg bg-white border cursor-pointer ${
-                            loadingAiField[`${post.id}_summarize`] ? 'animate-pulse text-emerald-600' : 'hover:bg-slate-100 text-slate-600'
-                          }`}
+                          className={`px-2 py-0.5 rounded-lg bg-white border cursor-pointer ${loadingAiField[`${post.id}_summarize`] ? 'animate-pulse text-emerald-600' : 'hover:bg-slate-100 text-slate-600'
+                            }`}
                         >
                           ⚡ Synopsis
                         </button>
                         <button
                           onClick={() => handleSuggestReplyMessage(post.id, currentLang)}
-                          className={`px-2 py-0.5 rounded-lg bg-white border cursor-pointer ${
-                            loadingAiField[`${post.id}_suggest`] ? 'animate-pulse text-amber-600' : 'hover:bg-slate-100 text-slate-600'
-                          }`}
+                          className={`px-2 py-0.5 rounded-lg bg-white border cursor-pointer ${loadingAiField[`${post.id}_suggest`] ? 'animate-pulse text-amber-600' : 'hover:bg-slate-100 text-slate-600'
+                            }`}
                         >
                           💡 Suggest Reply
                         </button>
@@ -1456,11 +1441,10 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
                         {/* Like Button */}
                         <button
                           onClick={() => handleToggleLike(post.id)}
-                          className={`px-3 py-1.5 rounded-xl flex items-center space-x-1.5 transition-all text-xs font-black cursor-pointer ${
-                            isLiked
+                          className={`px-3 py-1.5 rounded-xl flex items-center space-x-1.5 transition-all text-xs font-black cursor-pointer ${isLiked
                               ? 'bg-emerald-600 text-white shadow-2xs'
                               : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                          }`}
+                            }`}
                         >
                           <Heart className={`w-3.5 h-3.5 ${isLiked ? 'fill-white' : ''}`} />
                           <span>{isLiked ? 'Liked' : 'Like'}</span>
@@ -1478,11 +1462,10 @@ export const CommunityTabView: React.FC<CommunityTabViewProps> = ({
                         {/* Bookmark / Save */}
                         <button
                           onClick={() => handleToggleSavePost(post.id)}
-                          className={`p-1.5 rounded-xl border transition-all cursor-pointer ${
-                            isSaved
+                          className={`p-1.5 rounded-xl border transition-all cursor-pointer ${isSaved
                               ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
                               : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600'
-                          }`}
+                            }`}
                           title="Bookmark post"
                         >
                           <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-current' : ''}`} />

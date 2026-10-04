@@ -6,138 +6,16 @@ import {
   Phone,
   MapPin,
   CheckCircle,
-  Truck,
-  Tractor,
   TrendingUp,
   TrendingDown,
   Tag,
   X,
   ChevronRight,
-  Calendar,
-  Clock,
-  Sparkles,
-  Package,
-  Check,
-  Info,
-  DollarSign,
-  AlertCircle,
-  ArrowUpRight,
-  Navigation
+  Sparkles
 } from 'lucide-react';
 import { ProductItem, CropPrice, LanguageCode, TranslationSet } from '../types';
 import { MOCK_CROP_PRICES } from '../data';
-
-export interface MachineryItem {
-  id: string;
-  name: string;
-  category: 'Tractor' | 'Harvester' | 'Implement' | 'Irrigation';
-  image: string;
-  rentalPrice: string;
-  location: string;
-  availability: 'Available Now' | 'Booked Today' | 'Available Tomorrow';
-  ownerName: string;
-  ownerPhone: string;
-  specs: string;
-}
-
-export interface LogisticsOption {
-  id: string;
-  carrierName: string;
-  vehicleType: string;
-  capacity: string;
-  pricePerKm: string;
-  location: string;
-  eta: string;
-  phone: string;
-  image: string;
-}
-
-export const MOCK_MACHINERY: MachineryItem[] = [
-  {
-    id: 'm1',
-    name: 'John Deere 5050D Tractor (50 HP)',
-    category: 'Tractor',
-    image: 'https://images.unsplash.com/photo-1592982537447-7440770cbfc9?auto=format&fit=crop&q=80&w=400',
-    rentalPrice: '₹800 / hour',
-    location: 'Chikkaballapura Hub',
-    availability: 'Available Now',
-    ownerName: 'Shankar Gowda',
-    ownerPhone: '+919876543210',
-    specs: 'Dual clutch, Power steering, Rotavator hook ready'
-  },
-  {
-    id: 'm2',
-    name: 'Kubota Crawler Sugarcane Harvester',
-    category: 'Harvester',
-    image: 'https://images.unsplash.com/photo-1530587191325-3db32d826c18?auto=format&fit=crop&q=80&w=400',
-    rentalPrice: '₹2,500 / acre',
-    location: 'Mandya Coop Pool',
-    availability: 'Available Now',
-    ownerName: 'Mandya Farmers Society',
-    ownerPhone: '+919845012345',
-    specs: 'Self-propelled, 98% clean stalk recovery'
-  },
-  {
-    id: 'm3',
-    name: 'Multi-Crop Thresher & Paddy Cleaner',
-    category: 'Implement',
-    image: 'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&q=80&w=400',
-    rentalPrice: '₹600 / hour',
-    location: 'Dharwad Rural Center',
-    availability: 'Available Tomorrow',
-    ownerName: 'Basavaraj Patil',
-    ownerPhone: '+919731234567',
-    specs: 'Diesel Engine driven, high grain output'
-  },
-  {
-    id: 'm4',
-    name: 'Heavy Duty 5-Rotor Rotavator',
-    category: 'Implement',
-    image: 'https://images.unsplash.com/photo-1595974482597-4b8da8879bc5?auto=format&fit=crop&q=80&w=400',
-    rentalPrice: '₹450 / hour',
-    location: 'Kolar District Pool',
-    availability: 'Available Now',
-    ownerName: 'Kolar Agro Machinery',
-    ownerPhone: '+919448098765',
-    specs: 'Boron steel blades, soil pulverization ready'
-  }
-];
-
-export const MOCK_LOGISTICS: LogisticsOption[] = [
-  {
-    id: 'l1',
-    carrierName: 'Kaveri Agri Flatbed Logistics',
-    vehicleType: 'Eicher 14ft Open Truck',
-    capacity: 'Up to 5.5 Tonnes',
-    pricePerKm: '₹18 / km',
-    location: 'Chikkaballapura to Kolar APMC',
-    eta: '30 mins away',
-    phone: '+919900112233',
-    image: 'https://images.unsplash.com/photo-1601584115197-04ecc0da31d7?auto=format&fit=crop&q=80&w=400'
-  },
-  {
-    id: 'l2',
-    carrierName: 'Karnataka Express Produce Pickup',
-    vehicleType: 'Mahindra Bolero Maxi Truck',
-    capacity: '1.5 Tonnes (Vegetable Crate Ready)',
-    pricePerKm: '₹14 / km',
-    location: 'Mandya to Bengaluru APMC',
-    eta: '15 mins away',
-    phone: '+919888776655',
-    image: 'https://images.unsplash.com/photo-1519003722824-194d4455a60c?auto=format&fit=crop&q=80&w=400'
-  },
-  {
-    id: 'l3',
-    carrierName: 'Chilly Cold Chain Reefer Express',
-    vehicleType: 'Refrigerated Cold Container',
-    capacity: '3.0 Tonnes (Temp controlled 4°C)',
-    pricePerKm: '₹24 / km',
-    location: 'Dharwad to Goa Market',
-    eta: 'Available on Booking',
-    phone: '+919777665544',
-    image: 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&q=80&w=400'
-  }
-];
+import { MandiMarketsView } from './MandiMarketsView';
 
 interface CartItem {
   product: ProductItem;
@@ -147,6 +25,7 @@ interface CartItem {
 export interface MarketplaceTabViewProps {
   products: ProductItem[];
   setProducts: React.Dispatch<React.SetStateAction<ProductItem[]>>;
+  mandiPricesList?: CropPrice[];
   showSellForm: boolean;
   setShowSellForm: (show: boolean) => void;
   newCropName: string;
@@ -174,6 +53,7 @@ export interface MarketplaceTabViewProps {
 
 export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
   products,
+  mandiPricesList,
   showSellForm,
   setShowSellForm,
   newCropName,
@@ -196,27 +76,17 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
   setSelectedPredictedCrop,
   triggerCropPredictionInsight
 }) => {
+  const displayedPrices = (mandiPricesList && mandiPricesList.length > 0) ? mandiPricesList : MOCK_CROP_PRICES;
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<'all' | 'seeds' | 'fertilizer' | 'produce'>('all');
-  const [activeMarketSection, setActiveMarketSection] = useState<'buy' | 'sell' | 'rent' | 'logistics'>('buy');
-  
+  const [activeMarketSection, setActiveMarketSection] = useState<'buy' | 'sell' | 'mandi'>('buy');
+
   // Cart state
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
 
   // Detail modals state
   const [selectedPriceDetail, setSelectedPriceDetail] = useState<CropPrice | null>(null);
-  const [rentingItem, setRentingItem] = useState<MachineryItem | null>(null);
-  const [rentHours, setRentHours] = useState('4');
-  const [rentDeliveryLocation, setRentDeliveryLocation] = useState('Anemadagu Village, KA');
-
-  // Logistics booking state
-  const [bookingLogistics, setBookingLogistics] = useState<LogisticsOption | null>(null);
-  const [pickupAddr, setPickupAddr] = useState('Farm Gate, Chikkaballapura');
-  const [dropMandi, setDropMandi] = useState('Yeshwanthpur APMC Mandi, Bengaluru');
-  const [cargoWeight, setCargoWeight] = useState('2.5 Tonnes');
-  const [trackingIdInput, setTrackingIdInput] = useState('');
-  const [activeTrackingResult, setActiveTrackingResult] = useState<string | null>(null);
 
   // Add to cart helper
   const handleAddToCart = (product: ProductItem) => {
@@ -260,7 +130,7 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
 
   return (
     <div id="v_marketplace_bazaar" className="p-3 pb-24 space-y-4 animate-fadeIn max-w-xl mx-auto font-sans">
-      
+
       {/* 1. HEADER */}
       <div className="bg-gradient-to-r from-emerald-850 to-teal-900 text-white p-4 rounded-3xl shadow-lg border border-emerald-500/20 space-y-3">
         <div className="flex justify-between items-center">
@@ -273,8 +143,8 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
             </div>
             <p className="text-[11px] font-medium text-emerald-200 leading-tight mt-0.5">
               {currentLang === 'kn'
-                ? 'ನೇರ ಖರೀದಿ, ಉಪಕರಣ ಬಾಡಿಗೆ ಮತ್ತು ಮಂಡಿ ರವಾನೆ'
-                : 'Direct harvest trades, machinery hire & APMC logistics'}
+                ? 'ರೈತರ ನೇರ ಮಾರುಕಟ್ಟೆ ಮತ್ತು ಮಂಡಿ ದರ ಸೂಚ್ಯಂಕ'
+                : 'Direct farm produce trades & live APMC mandi prices'}
             </p>
           </div>
 
@@ -302,8 +172,8 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={
               currentLang === 'kn'
-                ? 'ಬೆಳೆಗಳು, ಬೀಜಗಳು, ಉಪಕರಣಗಳನ್ನು ಹುಡುಕಿ...'
-                : t.marketplace.searchPlaceholder || 'Search crops, seeds, or equipment...'
+                ? 'ಬೆಳೆಗಳು, ಬೀಜಗಳು, ಉತ್ಪನ್ನಗಳನ್ನು ಹುಡುಕಿ...'
+                : t.marketplace.searchPlaceholder || 'Search crops, seeds, or produce...'
             }
             className="w-full bg-white text-slate-800 placeholder:text-slate-400 text-xs font-semibold pl-10 pr-9 py-2.5 rounded-2xl outline-none shadow-inner border border-emerald-100/30 focus:ring-2 focus:ring-emerald-400"
           />
@@ -329,27 +199,24 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
             if (el) el.scrollIntoView({ behavior: 'smooth' });
             triggerToast('Browsing direct farm crops & inputs listing');
           }}
-          className={`p-3.5 rounded-2xl border transition-all text-left flex items-start space-x-3 cursor-pointer shadow-sm ${
-            activeMarketSection === 'buy'
+          className={`p-3.5 rounded-2xl border transition-all text-left flex items-start space-x-3 cursor-pointer shadow-sm ${activeMarketSection === 'buy'
               ? 'bg-emerald-800 text-white border-emerald-700 ring-2 ring-emerald-500/30'
               : 'bg-white hover:bg-emerald-50/50 text-slate-800 border-slate-100 hover:border-emerald-200'
-          }`}
+            }`}
         >
           <div
-            className={`p-2.5 rounded-xl ${
-              activeMarketSection === 'buy' ? 'bg-emerald-700/80 text-white' : 'bg-emerald-100 text-emerald-800'
-            }`}
+            className={`p-2.5 rounded-xl ${activeMarketSection === 'buy' ? 'bg-emerald-700/80 text-white' : 'bg-emerald-100 text-emerald-800'
+              }`}
           >
             <Tag className="w-5 h-5" />
           </div>
           <div className="flex-1 min-w-0">
-            <h4 className="text-xs font-black leading-tight">Buy Crops</h4>
+            <h4 className="text-xs font-black leading-tight">Buy Produce</h4>
             <p
-              className={`text-[9px] font-medium mt-0.5 truncate ${
-                activeMarketSection === 'buy' ? 'text-emerald-200' : 'text-slate-500'
-              }`}
+              className={`text-[9px] font-medium mt-0.5 truncate ${activeMarketSection === 'buy' ? 'text-emerald-200' : 'text-slate-500'
+                }`}
             >
-              Fresh produce & seeds
+              Crops & Seeds
             </p>
           </div>
         </button>
@@ -363,102 +230,112 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
             if (el) el.scrollIntoView({ behavior: 'smooth' });
             triggerToast('Opening harvest listing form');
           }}
-          className={`p-3.5 rounded-2xl border transition-all text-left flex items-start space-x-3 cursor-pointer shadow-sm ${
-            showSellForm || activeMarketSection === 'sell'
+          className={`p-3.5 rounded-2xl border transition-all text-left flex items-start space-x-3 cursor-pointer shadow-sm ${showSellForm || activeMarketSection === 'sell'
               ? 'bg-emerald-800 text-white border-emerald-700 ring-2 ring-emerald-500/30'
               : 'bg-white hover:bg-emerald-50/50 text-slate-800 border-slate-100 hover:border-emerald-200'
-          }`}
+            }`}
         >
           <div
-            className={`p-2.5 rounded-xl ${
-              showSellForm || activeMarketSection === 'sell'
+            className={`p-2.5 rounded-xl ${showSellForm || activeMarketSection === 'sell'
                 ? 'bg-emerald-700/80 text-white'
                 : 'bg-emerald-100 text-emerald-800'
-            }`}
+              }`}
           >
             <Plus className="w-5 h-5" />
           </div>
           <div className="flex-1 min-w-0">
-            <h4 className="text-xs font-black leading-tight">Sell Crops</h4>
+            <h4 className="text-xs font-black leading-tight">Sell Harvest</h4>
             <p
-              className={`text-[9px] font-medium mt-0.5 truncate ${
-                showSellForm || activeMarketSection === 'sell' ? 'text-emerald-200' : 'text-slate-500'
-              }`}
+              className={`text-[9px] font-medium mt-0.5 truncate ${showSellForm || activeMarketSection === 'sell' ? 'text-emerald-200' : 'text-slate-500'
+                }`}
             >
-              Post harvest offer
+              List farm offer
             </p>
           </div>
         </button>
 
-        {/* Action 3: Machinery Rental */}
+        {/* Action 3: APMC Mandi Rates */}
         <button
           onClick={() => {
-            setActiveMarketSection('rent');
-            const el = document.getElementById('machinery_rental_section');
-            if (el) el.scrollIntoView({ behavior: 'smooth' });
-            triggerToast('Viewing equipment & machinery rentals');
+            setActiveMarketSection('mandi');
+            triggerToast('Viewing live APMC mandi prices');
           }}
-          className={`p-3.5 rounded-2xl border transition-all text-left flex items-start space-x-3 cursor-pointer shadow-sm ${
-            activeMarketSection === 'rent'
+          className={`p-3.5 rounded-2xl border transition-all text-left flex items-start space-x-3 cursor-pointer shadow-sm ${activeMarketSection === 'mandi'
               ? 'bg-emerald-800 text-white border-emerald-700 ring-2 ring-emerald-500/30'
               : 'bg-white hover:bg-emerald-50/50 text-slate-800 border-slate-100 hover:border-emerald-200'
-          }`}
+            }`}
         >
           <div
-            className={`p-2.5 rounded-xl ${
-              activeMarketSection === 'rent' ? 'bg-emerald-700/80 text-white' : 'bg-emerald-100 text-emerald-800'
-            }`}
+            className={`p-2.5 rounded-xl ${activeMarketSection === 'mandi' ? 'bg-emerald-700/80 text-white' : 'bg-emerald-100 text-emerald-800'
+              }`}
           >
-            <Tractor className="w-5 h-5" />
+            <TrendingUp className="w-5 h-5" />
           </div>
           <div className="flex-1 min-w-0">
-            <h4 className="text-xs font-black leading-tight">Machinery Rental</h4>
+            <h4 className="text-xs font-black leading-tight">Mandi Rates</h4>
             <p
-              className={`text-[9px] font-medium mt-0.5 truncate ${
-                activeMarketSection === 'rent' ? 'text-emerald-200' : 'text-slate-500'
-              }`}
+              className={`text-[9px] font-medium mt-0.5 truncate ${activeMarketSection === 'mandi' ? 'text-emerald-200' : 'text-slate-500'
+                }`}
             >
-              Tractors & Harvesters
+              Live APMC prices
             </p>
           </div>
         </button>
 
-        {/* Action 4: Logistics */}
+        {/* Action 4: Cart & Orders */}
         <button
           onClick={() => {
-            setActiveMarketSection('logistics');
-            const el = document.getElementById('logistics_section');
-            if (el) el.scrollIntoView({ behavior: 'smooth' });
-            triggerToast('Opened APMC mandi transport booking');
+            setIsCartOpen(true);
+            triggerToast('Viewing farm cart and direct orders');
           }}
-          className={`p-3.5 rounded-2xl border transition-all text-left flex items-start space-x-3 cursor-pointer shadow-sm ${
-            activeMarketSection === 'logistics'
-              ? 'bg-emerald-800 text-white border-emerald-700 ring-2 ring-emerald-500/30'
-              : 'bg-white hover:bg-emerald-50/50 text-slate-800 border-slate-100 hover:border-emerald-200'
-          }`}
+          className="p-3.5 rounded-2xl border transition-all text-left flex items-start space-x-3 cursor-pointer shadow-sm bg-white hover:bg-emerald-50/50 text-slate-800 border-slate-100 hover:border-emerald-200"
         >
-          <div
-            className={`p-2.5 rounded-xl ${
-              activeMarketSection === 'logistics' ? 'bg-emerald-700/80 text-white' : 'bg-emerald-100 text-emerald-800'
-            }`}
-          >
-            <Truck className="w-5 h-5" />
+          <div className="p-2.5 rounded-xl bg-emerald-100 text-emerald-800 relative">
+            <ShoppingCart className="w-5 h-5" />
+            {cartItemCount > 0 && (
+              <span className="absolute -top-1 -right-1 bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full">
+                {cartItemCount}
+              </span>
+            )}
           </div>
           <div className="flex-1 min-w-0">
-            <h4 className="text-xs font-black leading-tight">Logistics</h4>
-            <p
-              className={`text-[9px] font-medium mt-0.5 truncate ${
-                activeMarketSection === 'logistics' ? 'text-emerald-200' : 'text-slate-500'
-              }`}
-            >
-              Trucks & Cold Vans
+            <h4 className="text-xs font-black leading-tight">Farm Cart</h4>
+            <p className="text-[9px] font-medium mt-0.5 truncate text-slate-500">
+              {cartItemCount > 0 ? `${cartItemCount} item(s) selected` : 'Review orders'}
             </p>
           </div>
         </button>
       </div>
 
-      {/* SELL REGISTRATION FORM (Post Harvest) */}
-      {showSellForm && (
+      {/* 🌟 APMC MANDI RATES VIEW (Comprehensive Experience) */}
+      {activeMarketSection === 'mandi' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between bg-white p-3 rounded-2xl border border-slate-100 shadow-xs">
+            <button
+              onClick={() => {
+                setActiveMarketSection('buy');
+                triggerToast('Back to Marketplace Produce');
+              }}
+              className="text-xs font-bold text-slate-700 hover:text-emerald-800 flex items-center space-x-1 cursor-pointer transition-all active:scale-95"
+            >
+              <span>← Back to Farm Produce</span>
+            </button>
+            <span className="text-[10px] font-black text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+              AGMARKNET Data
+            </span>
+          </div>
+
+          <MandiMarketsView
+            currentLang={currentLang}
+            triggerToast={triggerToast}
+          />
+        </div>
+      )}
+
+      {activeMarketSection !== 'mandi' && (
+        <>
+          {/* SELL REGISTRATION FORM (Post Harvest) */}
+          {showSellForm && (
         <form
           id="post_harvest_sell_form"
           onSubmit={handleHostMarketSale}
@@ -582,7 +459,7 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
       )}
 
       {/* 3. MARKET PRICES (Compact Cards) */}
-      <div className="space-y-2.5 bg-slate-50 p-3.5 rounded-3xl border border-slate-100">
+      <div id="apmc_prices_section" className="space-y-2.5 bg-slate-50 p-3.5 rounded-3xl border border-slate-100 scroll-mt-20">
         <div className="flex justify-between items-center">
           <div className="flex items-center space-x-1.5">
             <TrendingUp className="w-4 h-4 text-emerald-600" />
@@ -590,13 +467,20 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
               {currentLang === 'kn' ? 'ಮಂಡಿ ಬೆಲೆ ಸೂಚ್ಯಂಕ' : 'APMC Live Market Prices'}
             </h3>
           </div>
-          <span className="text-[9px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-black uppercase">
-            Live
-          </span>
+          <button
+            onClick={() => {
+              setActiveMarketSection('mandi');
+              triggerToast('Exploring all official APMC mandis');
+            }}
+            className="text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-2.5 py-1 rounded-xl transition-all cursor-pointer flex items-center space-x-0.5 shadow-2xs"
+          >
+            <span>All Mandis</span>
+            <ChevronRight className="w-3 h-3" />
+          </button>
         </div>
 
         <div className="grid grid-cols-2 gap-2">
-          {MOCK_CROP_PRICES.map((crop) => {
+          {displayedPrices.map((crop) => {
             const isUp = crop.trend === 'up';
             const isDown = crop.trend === 'down';
 
@@ -611,13 +495,12 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
                       {crop.name}
                     </h4>
                     <span
-                      className={`text-[9px] font-black px-1.5 py-0.5 rounded flex items-center shrink-0 ${
-                        isUp
+                      className={`text-[9px] font-black px-1.5 py-0.5 rounded flex items-center shrink-0 ${isUp
                           ? 'bg-emerald-50 text-emerald-700'
                           : isDown
-                          ? 'bg-red-50 text-red-700'
-                          : 'bg-slate-100 text-slate-600'
-                      }`}
+                            ? 'bg-red-50 text-red-700'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
                     >
                       {isUp && <TrendingUp className="w-3 h-3 mr-0.5" />}
                       {isDown && <TrendingDown className="w-3 h-3 mr-0.5" />}
@@ -677,41 +560,37 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
         <div className="flex space-x-1.5 overflow-x-auto pb-1 scrollbar-none">
           <button
             onClick={() => setSelectedCategoryFilter('all')}
-            className={`px-3 py-1.5 rounded-xl text-[10px] font-black shrink-0 transition-all cursor-pointer ${
-              selectedCategoryFilter === 'all'
+            className={`px-3 py-1.5 rounded-xl text-[10px] font-black shrink-0 transition-all cursor-pointer ${selectedCategoryFilter === 'all'
                 ? 'bg-emerald-700 text-white shadow-xs'
                 : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-            }`}
+              }`}
           >
             All Items
           </button>
           <button
             onClick={() => setSelectedCategoryFilter('produce')}
-            className={`px-3 py-1.5 rounded-xl text-[10px] font-black shrink-0 transition-all cursor-pointer ${
-              selectedCategoryFilter === 'produce'
+            className={`px-3 py-1.5 rounded-xl text-[10px] font-black shrink-0 transition-all cursor-pointer ${selectedCategoryFilter === 'produce'
                 ? 'bg-emerald-700 text-white shadow-xs'
                 : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-            }`}
+              }`}
           >
             Fresh Produce
           </button>
           <button
             onClick={() => setSelectedCategoryFilter('seeds')}
-            className={`px-3 py-1.5 rounded-xl text-[10px] font-black shrink-0 transition-all cursor-pointer ${
-              selectedCategoryFilter === 'seeds'
+            className={`px-3 py-1.5 rounded-xl text-[10px] font-black shrink-0 transition-all cursor-pointer ${selectedCategoryFilter === 'seeds'
                 ? 'bg-emerald-700 text-white shadow-xs'
                 : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-            }`}
+              }`}
           >
             Seeds & Grains
           </button>
           <button
             onClick={() => setSelectedCategoryFilter('fertilizer')}
-            className={`px-3 py-1.5 rounded-xl text-[10px] font-black shrink-0 transition-all cursor-pointer ${
-              selectedCategoryFilter === 'fertilizer'
+            className={`px-3 py-1.5 rounded-xl text-[10px] font-black shrink-0 transition-all cursor-pointer ${selectedCategoryFilter === 'fertilizer'
                 ? 'bg-emerald-700 text-white shadow-xs'
                 : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-            }`}
+              }`}
           >
             Organic Fertilizers
           </button>
@@ -772,8 +651,7 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
                 <div className="flex space-x-2 pt-0.5">
                   <a
                     href={`tel:${item.phone}`}
-                    onClick={(e) => {
-                      e.preventDefault();
+                    onClick={() => {
                       triggerToast(`Connecting telephone call to seller (${item.seller})...`);
                     }}
                     className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-black rounded-xl shadow-md shadow-emerald-100 flex items-center justify-center space-x-1.5 transition-all cursor-pointer"
@@ -794,8 +672,8 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
                     onClick={() => {
                       triggerToast(`Checking APMC price metrics for ${item.title}...`);
                       setActiveTab('home');
-                      setSelectedPredictedCrop(MOCK_CROP_PRICES[0]);
-                      triggerCropPredictionInsight(MOCK_CROP_PRICES[0]);
+                      setSelectedPredictedCrop(displayedPrices[0]);
+                      triggerCropPredictionInsight(displayedPrices[0]);
                     }}
                     className="px-3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-xl flex items-center space-x-1 transition-all cursor-pointer"
                     title="Price Audit AI"
@@ -809,259 +687,8 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
           ))}
         </div>
       </div>
-
-      {/* 5. MACHINERY RENTAL */}
-      <div id="machinery_rental_section" className="space-y-3 pt-2 scroll-mt-20">
-        <div className="flex justify-between items-center px-1">
-          <div>
-            <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center space-x-1.5">
-              <Tractor className="w-4 h-4 text-emerald-700" />
-              <span>Machinery & Equipment Rental</span>
-            </h3>
-            <p className="text-[10px] text-slate-400 font-semibold">
-              Book tractors, harvesters & implements near your farm
-            </p>
-          </div>
-
-          <span className="text-[9px] bg-yellow-100 text-yellow-800 font-black px-2 py-0.5 rounded-full uppercase">
-            4 Machines Ready
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 gap-3">
-          {MOCK_MACHINERY.map((item) => (
-            <div
-              key={item.id}
-              className="bg-white rounded-3xl border border-slate-100 shadow-lg p-3.5 space-y-3 transition-all hover:border-emerald-200"
-            >
-              <div className="flex space-x-3">
-                <div className="w-24 h-24 rounded-2xl bg-slate-100 overflow-hidden shrink-0 border border-slate-100">
-                  <img
-                    referrerPolicy="no-referrer"
-                    src={item.image}
-                    alt={item.name}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-
-                <div className="flex-1 min-w-0 space-y-1">
-                  <div className="flex justify-between items-start">
-                    <span className="text-[8px] bg-emerald-50 text-emerald-800 font-black px-2 py-0.5 rounded-md uppercase tracking-wider">
-                      {item.category}
-                    </span>
-                    <span
-                      className={`text-[8px] font-bold px-1.5 py-0.5 rounded ${
-                        item.availability === 'Available Now'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-amber-50 text-amber-800'
-                      }`}
-                    >
-                      {item.availability}
-                    </span>
-                  </div>
-
-                  <h4 className="text-xs font-black text-slate-800 leading-tight">
-                    {item.name}
-                  </h4>
-
-                  <p className="text-[9px] text-slate-400 font-bold flex items-center space-x-1">
-                    <MapPin className="w-3 h-3 text-slate-400" />
-                    <span>{item.location}</span>
-                  </p>
-
-                  <p className="text-[9px] text-slate-500 font-semibold italic truncate">
-                    {item.specs}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between pt-2 border-t border-slate-50">
-                <div>
-                  <span className="text-[8px] text-slate-400 font-bold uppercase block leading-none">Rate</span>
-                  <span className="text-xs font-black text-emerald-850 font-mono">
-                    {item.rentalPrice}
-                  </span>
-                </div>
-
-                <div className="flex space-x-1.5">
-                  <a
-                    href={`tel:${item.ownerPhone}`}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      triggerToast(`Dialing machine owner ${item.ownerName}...`);
-                    }}
-                    className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-all cursor-pointer"
-                    title="Call Owner"
-                  >
-                    <Phone className="w-3.5 h-3.5" />
-                  </a>
-
-                  <button
-                    onClick={() => {
-                      setRentingItem(item);
-                      triggerToast(`Initiating rental booking for ${item.name}`);
-                    }}
-                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center space-x-1"
-                  >
-                    <Tractor className="w-3.5 h-3.5" />
-                    <span>Rent Now</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* 6. LOGISTICS & TRANSPORT */}
-      <div id="logistics_section" className="space-y-3 pt-2 scroll-mt-20">
-        <div className="flex justify-between items-center px-1">
-          <div>
-            <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center space-x-1.5">
-              <Truck className="w-4 h-4 text-emerald-700" />
-              <span>APMC Transport & Logistics</span>
-            </h3>
-            <p className="text-[10px] text-slate-400 font-semibold">
-              Consolidated trucks, Maxi autos & refrigerated carriers
-            </p>
-          </div>
-
-          <span className="text-[9px] bg-emerald-100 text-emerald-800 font-black px-2 py-0.5 rounded-full uppercase">
-            3 Logistics Partners
-          </span>
-        </div>
-
-        {/* Live Trucking Options */}
-        <div className="space-y-3">
-          {MOCK_LOGISTICS.map((truck) => (
-            <div
-              key={truck.id}
-              className="bg-white rounded-3xl border border-slate-100 shadow-md p-3.5 space-y-3"
-            >
-              <div className="flex space-x-3 items-center">
-                <div className="w-20 h-20 rounded-2xl bg-slate-100 overflow-hidden shrink-0 border border-slate-100">
-                  <img
-                    referrerPolicy="no-referrer"
-                    src={truck.image}
-                    alt={truck.vehicleType}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-
-                <div className="flex-1 min-w-0 space-y-1">
-                  <div className="flex justify-between items-start">
-                    <span className="text-[8px] bg-teal-50 text-teal-800 font-black px-2 py-0.5 rounded uppercase">
-                      {truck.vehicleType}
-                    </span>
-                    <span className="text-[8px] text-emerald-700 font-extrabold">
-                      {truck.eta}
-                    </span>
-                  </div>
-
-                  <h4 className="text-xs font-black text-slate-800 leading-tight">
-                    {truck.carrierName}
-                  </h4>
-
-                  <p className="text-[9px] text-slate-500 font-semibold flex items-center space-x-1">
-                    <Package className="w-3 h-3 text-slate-400" />
-                    <span>Capacity: {truck.capacity}</span>
-                  </p>
-
-                  <p className="text-[9px] text-slate-400 font-bold flex items-center space-x-1">
-                    <Navigation className="w-3 h-3 text-slate-400" />
-                    <span>Route: {truck.location}</span>
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between pt-2 border-t border-slate-50">
-                <div>
-                  <span className="text-[8px] text-slate-400 font-bold uppercase block leading-none">Rate</span>
-                  <span className="text-xs font-black text-emerald-850 font-mono">
-                    {truck.pricePerKm}
-                  </span>
-                </div>
-
-                <div className="flex space-x-1.5">
-                  <a
-                    href={`tel:${truck.phone}`}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      triggerToast(`Connecting call to driver (${truck.carrierName})...`);
-                    }}
-                    className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-all cursor-pointer"
-                  >
-                    <Phone className="w-3.5 h-3.5" />
-                  </a>
-
-                  <button
-                    onClick={() => {
-                      setBookingLogistics(truck);
-                      triggerToast(`Opening transport booking for ${truck.carrierName}`);
-                    }}
-                    className="px-3.5 py-2 bg-teal-800 hover:bg-teal-900 text-white font-black text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center space-x-1"
-                  >
-                    <Truck className="w-3.5 h-3.5" />
-                    <span>Book Carrier</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Live Waybill Tracking Tool */}
-        <div className="bg-gradient-to-r from-teal-900 to-emerald-900 text-white p-4 rounded-3xl space-y-3 shadow-lg">
-          <div className="flex items-center space-x-2">
-            <Navigation className="w-4 h-4 text-emerald-400 animate-pulse" />
-            <h4 className="text-xs font-black tracking-wider uppercase text-emerald-300">
-              Track Harvest Consignment
-            </h4>
-          </div>
-
-          <p className="text-[10px] text-emerald-100 font-medium">
-            Enter AgriVerse Waybill / Trucking ID to check live position & APMC gate entry
-          </p>
-
-          <div className="flex space-x-2">
-            <input
-              type="text"
-              value={trackingIdInput}
-              onChange={(e) => setTrackingIdInput(e.target.value)}
-              placeholder="E.g., AGRI-LOG-8842"
-              className="flex-1 bg-white/10 text-white placeholder:text-emerald-300/60 text-xs font-mono font-bold px-3 py-2 rounded-xl outline-none border border-white/20 focus:border-emerald-400"
-            />
-            <button
-              onClick={() => {
-                if (!trackingIdInput.trim()) {
-                  setActiveTrackingResult(
-                    '🚛 Waybill AGRI-LOG-8842: Driver M. Ramesh (Bolero Maxi). Location: 12 km from Yeshwanthpur APMC. Estimated Arrival: 25 mins.'
-                  );
-                  setTrackingIdInput('AGRI-LOG-8842');
-                  triggerToast('Loaded sample tracking ID AGRI-LOG-8842');
-                } else {
-                  setActiveTrackingResult(
-                    `🚛 Waybill ${trackingIdInput.toUpperCase()}: Vehicle in transit on NH-44. GPS Speed: 42 km/h. Temp inside container: 5°C. Arrival on schedule.`
-                  );
-                  triggerToast(`Locating consignment ID: ${trackingIdInput}`);
-                }
-              }}
-              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-black text-xs rounded-xl cursor-pointer transition-all shrink-0"
-            >
-              Track
-            </button>
-          </div>
-
-          {activeTrackingResult && (
-            <div className="p-3 bg-white/10 rounded-2xl border border-emerald-400/30 text-xs font-medium leading-relaxed text-emerald-100 animate-fadeIn space-y-1">
-              <span className="text-[9px] font-black uppercase text-emerald-300 block">
-                Live GPS Carrier Report:
-              </span>
-              <p>{activeTrackingResult}</p>
-            </div>
-          )}
-        </div>
-      </div>
+    </>
+  )}
 
       {/* --- SLIDE-OVER MODAL: CART DRAWER --- */}
       {isCartOpen && (
@@ -1088,65 +715,114 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
                 <div>
                   <h4 className="text-xs font-bold text-slate-800">Your cart is empty</h4>
                   <p className="text-[10px] text-slate-400 mt-0.5">
-                    Add seeds, fertilizers or produce to place direct orders
+                    Add seeds, fertilizers or produce to contact sellers directly
                   </p>
                 </div>
               </div>
             ) : (
               <div className="flex-1 space-y-3 overflow-y-auto pr-1">
-                {cart.map((item, idx) => (
-                  <div
-                    key={idx}
-                    className="p-3 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between"
-                  >
-                    <div className="flex items-center space-x-3">
-                      <img
-                        src={item.product.image}
-                        alt={item.product.title}
-                        className="w-12 h-12 rounded-xl object-cover"
-                      />
-                      <div>
-                        <h4 className="text-xs font-black text-slate-800 line-clamp-1">
-                          {item.product.title}
-                        </h4>
-                        <p className="text-[10px] text-emerald-800 font-extrabold font-mono">
-                          {item.product.price}
-                        </p>
+                {cart.map((item, idx) => {
+                  const cleanPhone = (item.product.phone || '').replace(/[^0-9]/g, '');
+                  const waText = encodeURIComponent(
+                    `Namaste! I would like to purchase ${item.quantity} unit(s) of ${item.product.title} (${item.product.price}) listed on AgriVerse.`
+                  );
+                  return (
+                    <div
+                      key={idx}
+                      className="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-2.5"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          <img
+                            src={item.product.image}
+                            alt={item.product.title}
+                            className="w-12 h-12 rounded-xl object-cover"
+                          />
+                          <div>
+                            <h4 className="text-xs font-black text-slate-800 line-clamp-1">
+                              {item.product.title}
+                            </h4>
+                            <p className="text-[10px] text-emerald-800 font-extrabold font-mono">
+                              {item.product.price}
+                            </p>
+                            <p className="text-[9px] text-slate-500 font-semibold">
+                              Seller: {item.product.seller}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center space-x-2">
+                          <span className="text-xs font-bold text-slate-700 bg-white px-2 py-1 rounded-lg border">
+                            Qty: {item.quantity}
+                          </span>
+                          <button
+                            onClick={() =>
+                              setCart((prev) =>
+                                prev.filter((i) => i.product.id !== item.product.id)
+                              )
+                            }
+                            className="text-red-500 text-xs font-bold p-1 hover:bg-red-50 rounded"
+                            title="Remove item"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2 pt-1 border-t border-slate-200/60">
+                        {item.product.phone && (
+                          <a
+                            href={`tel:${item.product.phone}`}
+                            onClick={() => triggerToast(`Dialing ${item.product.seller}...`)}
+                            className="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[10px] font-bold flex items-center justify-center space-x-1"
+                          >
+                            <Phone className="w-3 h-3" />
+                            <span>Call Seller</span>
+                          </a>
+                        )}
+                        {cleanPhone && (
+                          <a
+                            href={`https://wa.me/${cleanPhone}?text=${waText}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() => triggerToast(`Opening WhatsApp chat with ${item.product.seller}...`)}
+                            className="flex-1 py-1.5 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-[10px] font-bold flex items-center justify-center space-x-1"
+                          >
+                            <span>WhatsApp</span>
+                          </a>
+                        )}
                       </div>
                     </div>
-
-                    <div className="flex items-center space-x-2">
-                      <span className="text-xs font-bold text-slate-700 bg-white px-2 py-1 rounded-lg border">
-                        Qty: {item.quantity}
-                      </span>
-                      <button
-                        onClick={() =>
-                          setCart((prev) =>
-                            prev.filter((i) => i.product.id !== item.product.id)
-                          )
-                        }
-                        className="text-red-500 text-xs font-bold p-1 hover:bg-red-50 rounded"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
             {cart.length > 0 && (
               <div className="pt-3 border-t border-slate-100 space-y-2">
-                <button
-                  onClick={() => {
-                    triggerToast('Order request placed successfully! Sellers notified.');
-                    setCart([]);
-                    setIsCartOpen(false);
-                  }}
-                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-2xl shadow-lg transition-all cursor-pointer"
-                >
-                  Confirm Order ({cartItemCount} Items)
-                </button>
+                <p className="text-[10px] text-slate-500 text-center font-medium">
+                  Connect directly with verified farmers to finalize pricing & gate delivery.
+                </p>
+                <div className="flex space-x-2">
+                  <button
+                    onClick={() => {
+                      setCart([]);
+                      triggerToast('Farm cart cleared');
+                    }}
+                    className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+                  >
+                    Clear Cart
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsCartOpen(false);
+                      triggerToast('Connecting to seller contacts');
+                    }}
+                    className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md transition-all cursor-pointer"
+                  >
+                    Done
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -1216,170 +892,6 @@ export const MarketplaceTabView: React.FC<MarketplaceTabViewProps> = ({
                 className="flex-1 py-2.5 bg-emerald-600 text-white font-black text-xs rounded-xl shadow-md hover:bg-emerald-700"
               >
                 Full AI Advisory
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- MODAL 2: MACHINERY RENTAL BOOKING --- */}
-      {rentingItem && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-4 space-y-3 shadow-2xl border border-emerald-100">
-            <div className="flex justify-between items-start border-b border-slate-100 pb-2">
-              <div>
-                <span className="text-[8px] bg-emerald-100 text-emerald-800 font-black px-2 py-0.5 rounded uppercase">
-                  Equipment Lease Request
-                </span>
-                <h3 className="text-xs font-black text-slate-800 mt-1">
-                  {rentingItem.name}
-                </h3>
-              </div>
-              <button
-                onClick={() => setRentingItem(null)}
-                className="p-1 bg-slate-100 rounded-full text-slate-400"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-2 text-xs">
-              <p className="text-[10px] text-slate-500">
-                Owner: <span className="font-bold text-slate-800">{rentingItem.ownerName}</span> ({rentingItem.location})
-              </p>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                  Duration Needed
-                </label>
-                <select
-                  value={rentHours}
-                  onChange={(e) => setRentHours(e.target.value)}
-                  className="w-full bg-slate-50 border p-2 rounded-xl text-xs font-bold text-slate-800 outline-none"
-                >
-                  <option value="2">2 Hours (Quick tilling)</option>
-                  <option value="4">4 Hours (Half Day)</option>
-                  <option value="8">8 Hours (Full Day)</option>
-                  <option value="24">24 Hours (Full Lease)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                  Delivery Field Location
-                </label>
-                <input
-                  type="text"
-                  value={rentDeliveryLocation}
-                  onChange={(e) => setRentDeliveryLocation(e.target.value)}
-                  className="w-full bg-slate-50 border p-2 rounded-xl text-xs font-semibold text-slate-800 outline-none"
-                />
-              </div>
-
-              <div className="bg-emerald-50 p-2.5 rounded-xl text-[10px] text-emerald-900 font-medium">
-                💰 Rate: <span className="font-bold">{rentingItem.rentalPrice}</span>. Fuel & operator included.
-              </div>
-            </div>
-
-            <div className="flex space-x-2 pt-1">
-              <button
-                onClick={() => setRentingItem(null)}
-                className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  triggerToast(`Rental request for ${rentingItem.name} sent to ${rentingItem.ownerName}!`);
-                  setRentingItem(null);
-                }}
-                className="flex-1 py-2.5 bg-emerald-600 text-white font-black text-xs rounded-xl shadow-md hover:bg-emerald-700"
-              >
-                Confirm Lease
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- MODAL 3: LOGISTICS BOOKING --- */}
-      {bookingLogistics && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-4 space-y-3 shadow-2xl border border-teal-100">
-            <div className="flex justify-between items-start border-b border-slate-100 pb-2">
-              <div>
-                <span className="text-[8px] bg-teal-100 text-teal-800 font-black px-2 py-0.5 rounded uppercase">
-                  APMC Carrier Dispatch
-                </span>
-                <h3 className="text-xs font-black text-slate-800 mt-1">
-                  {bookingLogistics.carrierName}
-                </h3>
-              </div>
-              <button
-                onClick={() => setBookingLogistics(null)}
-                className="p-1 bg-slate-100 rounded-full text-slate-400"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-2 text-xs">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                  Pickup Farm Address
-                </label>
-                <input
-                  type="text"
-                  value={pickupAddr}
-                  onChange={(e) => setPickupAddr(e.target.value)}
-                  className="w-full bg-slate-50 border p-2 rounded-xl text-xs font-semibold text-slate-800 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                  Destination APMC Mandi
-                </label>
-                <input
-                  type="text"
-                  value={dropMandi}
-                  onChange={(e) => setDropMandi(e.target.value)}
-                  className="w-full bg-slate-50 border p-2 rounded-xl text-xs font-semibold text-slate-800 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                  Cargo Weight
-                </label>
-                <input
-                  type="text"
-                  value={cargoWeight}
-                  onChange={(e) => setCargoWeight(e.target.value)}
-                  className="w-full bg-slate-50 border p-2 rounded-xl text-xs font-semibold text-slate-800 outline-none"
-                />
-              </div>
-
-              <div className="bg-teal-50 p-2.5 rounded-xl text-[10px] text-teal-900 font-medium">
-                🚚 Carrier: <span className="font-bold">{bookingLogistics.vehicleType}</span> ({bookingLogistics.pricePerKm})
-              </div>
-            </div>
-
-            <div className="flex space-x-2 pt-1">
-              <button
-                onClick={() => setBookingLogistics(null)}
-                className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  triggerToast(`Transport carrier booked! Waybill generated: AGRI-LOG-8842.`);
-                  setBookingLogistics(null);
-                }}
-                className="flex-1 py-2.5 bg-teal-800 text-white font-black text-xs rounded-xl shadow-md hover:bg-teal-900"
-              >
-                Confirm Dispatch
               </button>
             </div>
           </div>

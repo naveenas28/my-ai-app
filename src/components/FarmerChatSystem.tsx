@@ -2,8 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   MessageSquare,
   Send,
-  Video,
-  Phone,
   Paperclip,
   Image,
   Mic,
@@ -17,6 +15,7 @@ import {
   Globe,
   Sparkles,
   Users,
+  User,
   Search,
   Check,
   MapPin,
@@ -31,6 +30,7 @@ import {
   setDoc,
   onSnapshot,
   query,
+  where,
   orderBy,
   limit,
   getDocs,
@@ -38,6 +38,7 @@ import {
   updateDoc
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
+import { KarnatakaFpoDirectory } from './KarnatakaFpoDirectory';
 
 interface Farmer {
   uid: string;
@@ -97,7 +98,6 @@ export function FarmerChatSystem({
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [farmersList, setFarmersList] = useState<Farmer[]>([]);
-  const [typingStatus, setTypingStatus] = useState<Record<string, string>>({}); // uid -> "typing"
   
   // Realtime search / view selectors
   const [searchQuery, setSearchQuery] = useState('');
@@ -123,125 +123,115 @@ export function FarmerChatSystem({
 
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
 
-  // Online presences
-  const [onlinePresences, setOnlinePresences] = useState<Record<string, { status: string; lastSeen?: string }>>({});
-
   // Audio elements for player bubbles
   const [playingMsgId, setPlayingMsgId] = useState<string | null>(null);
   const audioInstancesRef = useRef<Record<string, HTMLAudioElement>>({});
 
-  // 1. Listen to available chat rooms
-  useEffect(() => {
-    // Automatically seed default community groups if collection is empty
-    const seedCommunityGroups = async () => {
-      try {
-        const roomsRef = collection(db, 'chats');
-        const q = query(roomsRef);
-        const snap = await getDocs(q);
-        if (snap.empty) {
-          const defaultRooms: ChatRoom[] = [
-            {
-              id: "group_kolar",
-              type: "group",
-              title: "📍 Kolar Tomato Club",
-              district: "Kolar",
-              cropCategory: "Tomato",
-              members: [],
-              lastMessage: "Welcome to Kolar district tomato grower focus discussion room!",
-              lastSenderName: "AgriVerse AI Admin"
-            },
-            {
-              id: "group_chikka",
-              type: "group",
-              title: "🍀 Chikkaballapura Organic Growers",
-              district: "Chikkaballapura",
-              cropCategory: "Vegetables",
-              members: [],
-              lastMessage: "Sharing organic composting insights in Kannada and English.",
-              lastSenderName: "Kavitha R."
-            },
-            {
-              id: "group_raichur",
-              type: "group",
-              title: "🌾 Raichur Rice Producers",
-              district: "Raichur",
-              cropCategory: "Paddy",
-              members: [],
-              lastMessage: "Mandi prediction: Basmati Paddy is predicted up 12% next week.",
-              lastSenderName: "Basavaraj"
-            }
-          ];
-          for (const room of defaultRooms) {
-            await setDoc(doc(db, 'chats', room.id), {
-              ...room,
-              updatedAt: serverTimestamp()
-            });
-          }
-        }
-      } catch (err) {
-        console.warn("Firestore seed issues bypassed:", err);
-      }
-    };
-    seedCommunityGroups();
+  const activeUid = auth.currentUser?.uid || userId;
 
-    const unsubscribe = onSnapshot(query(collection(db, 'chats'), orderBy('updatedAt', 'desc')), (snapshot) => {
-      const rooms: ChatRoom[] = [];
+  // 1. Listen to authorized chat rooms (public groups + private direct chats)
+  useEffect(() => {
+    const roomsMap: Record<string, ChatRoom> = {};
+
+    const syncRooms = () => {
+      const all = Object.values(roomsMap);
+      all.sort((a, b) => {
+        const timeA = a.updatedAt?.toMillis ? a.updatedAt.toMillis() : (a.updatedAt ? new Date(a.updatedAt).getTime() : 0);
+        const timeB = b.updatedAt?.toMillis ? b.updatedAt.toMillis() : (b.updatedAt ? new Date(b.updatedAt).getTime() : 0);
+        return timeB - timeA;
+      });
+      setChatRooms(all);
+    };
+
+    // 1. Group discussion clubs (authorized for all authenticated farmers)
+    const qGroup = query(collection(db, 'chats'), where('type', '==', 'group'));
+    const unsubGroup = onSnapshot(qGroup, (snapshot) => {
       snapshot.forEach((doc) => {
         const data = doc.data();
-        rooms.push({
+        roomsMap[doc.id] = {
           id: doc.id,
-          type: data.type,
-          title: data.title,
+          type: data.type || 'group',
+          title: data.title || 'Discussion Club',
           district: data.district,
           cropCategory: data.cropCategory,
           lastMessage: data.lastMessage || 'Start a conversation...',
           lastSenderName: data.lastSenderName || '',
           lastSenderUid: data.lastSenderUid || '',
+          updatedAt: data.updatedAt,
           members: data.members || []
-        });
+        };
       });
-      setChatRooms(rooms);
-    });
+      syncRooms();
+    }, (err) => console.warn("Group rooms query notice:", err));
 
-    return () => unsubscribe();
-  }, []);
+    // 2. Private direct chats for active user only (ensures private farmer-to-farmer isolation)
+    let unsubPrivate = () => {};
+    if (activeUid && activeUid !== 'guest_uid') {
+      const qPrivate = query(
+        collection(db, 'chats'),
+        where('members', 'array-contains', activeUid)
+      );
+      unsubPrivate = onSnapshot(qPrivate, (snapshot) => {
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          if (data.type === 'private') {
+            roomsMap[doc.id] = {
+              id: doc.id,
+              type: 'private',
+              title: data.title || 'Direct Chat',
+              district: data.district,
+              cropCategory: data.cropCategory,
+              lastMessage: data.lastMessage || 'Direct message...',
+              lastSenderName: data.lastSenderName || '',
+              lastSenderUid: data.lastSenderUid || '',
+              updatedAt: data.updatedAt,
+              members: data.members || []
+            };
+          }
+        });
+        syncRooms();
+      }, (err) => console.warn("Private direct chats query notice:", err));
+    }
 
-  // 2. Local seed of other farmers for One-To-One Private Rooms creation
+    return () => {
+      unsubGroup();
+      unsubPrivate();
+    };
+  }, [activeUid]);
+
+  // 2. Load real registered community farmers from Firestore
   useEffect(() => {
-    const list = [
-      { uid: "farmer_mallesh", displayName: "Malleshappa K. (Raichur)", district: "Raichur", village: "Lingsugur", avatarSeed: "M", verified: true },
-      { uid: "farmer_sukhdev", displayName: "Sukhdev Singh (Amritsar)", district: "Amritsar", village: "Ajnala", avatarSeed: "S", verified: true },
-      { uid: "farmer_kavitha", displayName: "Kavitha Raj (Kolar)", district: "Kolar", village: "Anemadagu", avatarSeed: "K", verified: true },
-      { uid: "farmer_shankar", displayName: "Shankar Lal (Varanasi)", district: "Varanasi", village: "Babatpur", avatarSeed: "S", verified: false }
-    ];
-    setFarmersList(list);
-
-    // Online status updates
-    const usersPresence: Record<string, any> = {};
-    list.forEach((f) => {
-      usersPresence[f.uid] = {
-        status: Math.random() > 0.4 ? 'online' : 'offline',
-        lastSeen: '10 min ago'
-      };
-    });
-    setOnlinePresences(usersPresence);
-
-    // Typing simulated effect
-    const typingInterval = setInterval(() => {
-      if (activeRoom && Math.random() > 0.75) {
-        const otherMembers = farmersList.filter(f => f.uid !== userId);
-        const randomFarmer = otherMembers[Math.floor(Math.random() * otherMembers.length)];
-        if (randomFarmer) {
-          setTypingStatus(prev => ({ ...prev, [randomFarmer.uid]: 'typing' }));
-          setTimeout(() => {
-            setTypingStatus(prev => ({ ...prev, [randomFarmer.uid]: '' }));
-          }, 3500);
+    let isMounted = true;
+    const loadRealFarmers = async () => {
+      try {
+        const usersSnap = await getDocs(query(collection(db, 'users'), limit(25)));
+        const list: Farmer[] = [];
+        usersSnap.forEach((docSnap) => {
+          const u = docSnap.data();
+          if (docSnap.id !== userId) {
+            list.push({
+              uid: docSnap.id,
+              displayName: u.name || u.fullName || u.displayName || 'Agri Member',
+              district: u.district || 'Karnataka',
+              village: u.village || '',
+              avatarSeed: (u.name || u.fullName || 'A')[0].toUpperCase(),
+              verified: !!u.isVerified || !!u.kycVerified
+            });
+          }
+        });
+        if (isMounted) {
+          setFarmersList(list);
         }
+      } catch (err) {
+        console.warn("Could not query community members from Firestore:", err);
       }
-    }, 12000);
+    };
 
-    return () => clearInterval(typingInterval);
-  }, [activeRoom]);
+    loadRealFarmers();
+    return () => {
+      isMounted = false;
+    };
+  }, [userId]);
 
   // 3. Listen to messages inside active room
   useEffect(() => {
@@ -284,11 +274,14 @@ export function FarmerChatSystem({
     const cleanText = textOverride || inputMessage.trim();
     if (!cleanText && !imagePayloadBase64 && !recBase64) return;
 
+    const currentUid = auth.currentUser?.uid || userId || "farmer_uid";
+    const currentName = auth.currentUser?.displayName || userName || "Farmer";
+
     try {
       const msgDoc = {
-        senderUid: userId || "guest_uid",
-        senderName: userName || "Agri Partner",
-        content: cleanText || (imagePayloadBase64 ? "🖼️ (Shared a leaf/disease image)" : "🎙️ (Shared a sound message)"),
+        senderUid: currentUid,
+        senderName: currentName,
+        content: cleanText || (imagePayloadBase64 ? "🖼️ (Shared a leaf/disease image)" : "🎙️ (Shared a voice message)"),
         imageUrl: imagePayloadBase64 || undefined,
         voiceUrl: recBase64 || undefined,
         voiceDuration: recBase64 ? recDuration : undefined,
@@ -300,9 +293,9 @@ export function FarmerChatSystem({
 
       // Update room lastMessage parameters
       await updateDoc(roomDocRef, {
-        lastMessage: cleanText || (imagePayloadBase64 ? "Shared an image" : "Shared a voice clip"),
-        lastSenderName: userName || "Farmer",
-        lastSenderUid: userId || "guest_uid",
+        lastMessage: cleanText || (imagePayloadBase64 ? "Shared an image" : "Shared a voice message"),
+        lastSenderName: currentName,
+        lastSenderUid: currentUid,
         updatedAt: serverTimestamp()
       });
 
@@ -311,7 +304,8 @@ export function FarmerChatSystem({
       setRecBase64(null);
       setRecDuration(0);
     } catch (e: any) {
-      triggerVisualToast('Network delay. Message failed to send in cloud.');
+      console.error("Chat message send error:", e);
+      triggerVisualToast('Message failed to deliver. Please check connection.');
     }
   };
 
@@ -330,16 +324,23 @@ export function FarmerChatSystem({
 
   // 5. One to One Direct Chat initiator
   const startDirectChatWithFarmer = async (farmer: Farmer) => {
-    const customId = `private_${[userId, farmer.uid].sort().join('_')}`;
+    const currentUid = auth.currentUser?.uid || userId;
+    if (!currentUid || currentUid === 'guest_uid') {
+      triggerVisualToast('Please log in with your farmer account to start a direct message.');
+      return;
+    }
+
+    const customId = `private_${[currentUid, farmer.uid].sort().join('_')}`;
     
     try {
       const roomPayload: ChatRoom = {
         id: customId,
         type: 'private',
         title: farmer.displayName,
-        members: [userId, farmer.uid],
-        lastMessage: "Chat room established. Start your direct conversation.",
-        lastSenderName: "System"
+        members: [currentUid, farmer.uid],
+        lastMessage: "Conversation opened. Say hello!",
+        lastSenderName: "System",
+        lastSenderUid: "system"
       };
 
       await setDoc(doc(db, 'chats', customId), {
@@ -349,15 +350,15 @@ export function FarmerChatSystem({
 
       setActiveRoom(roomPayload);
       setShowRoomCreator(false);
-      triggerVisualToast(`💬 Chat started with ${farmer.displayName}!`);
+      triggerVisualToast(`💬 Direct conversation opened with ${farmer.displayName}`);
     } catch (e: any) {
-      console.error(e);
-      // Fallback local visual creation
+      console.error("Direct chat initiation error:", e);
+      // Fallback local visual creation if offline or network issue
       const roomPayload: ChatRoom = {
         id: customId,
         type: 'private',
         title: farmer.displayName,
-        members: [userId, farmer.uid]
+        members: [currentUid, farmer.uid]
       };
       setActiveRoom(roomPayload);
       setShowRoomCreator(false);
@@ -413,10 +414,7 @@ export function FarmerChatSystem({
     if (chatMediaRecorderRef.current && chatMediaRecorderRef.current.state !== 'inactive') {
       chatMediaRecorderRef.current.stop();
     } else {
-      // Offline fallback simulator
-      const sim = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAERKgAAKkoAAAEKABgAZGF0YQQAAAAAAA==';
-      setRecBase64(sim);
-      triggerVisualToast('🎙️ Simulated speech compiled. Tap Send icon!');
+      triggerVisualToast('Audio recording is not supported or was cancelled.');
     }
   };
 
@@ -536,15 +534,15 @@ export function FarmerChatSystem({
                   {activeRoom.title}
                 </span>
                 {activeRoom.type === 'private' ? (
-                  <span className="w-2 h-2 bg-green-400 rounded-full" title="Online Member"></span>
+                  <User className="w-3.5 h-3.5 text-emerald-200" />
                 ) : (
-                  <Users className="w-3.5 h-3.5 text-emerald-250" />
+                  <Users className="w-3.5 h-3.5 text-emerald-200" />
                 )}
               </div>
               <p className="text-[9px] text-slate-200">
                 {activeRoom.type === 'group' 
-                  ? '🌍 District discussion community' 
-                  : '🟢 Online • Verified grower chat'
+                  ? '🌍 District discussion club' 
+                  : '💬 Direct farmer conversation'
                 }
               </p>
             </div>
@@ -552,14 +550,14 @@ export function FarmerChatSystem({
         ) : (
           <div className="flex items-center justify-between w-full">
             <div className="flex items-center space-x-1.5">
-              <MessageSquare className="w-5 h-5 text-emerald-200 animate-pulse" />
-              <span className="font-extrabold text-xs uppercase tracking-wider">AgriVerse Farmer Hub</span>
+              <MessageSquare className="w-5 h-5 text-emerald-200" />
+              <span className="font-extrabold text-xs uppercase tracking-wider">Farmer Direct Chat & FPOs</span>
             </div>
             <button
               onClick={() => setShowRoomCreator(prev => !prev)}
               className="bg-emerald-700 hover:bg-emerald-600 text-xs text-emerald-100 px-3 py-1 rounded-xl font-bold transition-all"
             >
-              {showRoomCreator ? 'View Clubs' : '💬 DM Farmer'}
+              {showRoomCreator ? '🏛 View FPOs' : '💬 DM Farmer'}
             </button>
           </div>
         )}
@@ -580,54 +578,34 @@ export function FarmerChatSystem({
       {/* 🚀 CHAT WRAPPER CONTAINER */}
       <div className="flex-1 flex overflow-hidden relative">
         
-        {/* VIEW 1: LANDING CONSOLE WITH ROOMS SEARCH AND CHANNEL SELECTORS */}
+        {/* VIEW 1: LANDING CONSOLE WITH REAL GOVERNMENT-LISTED KARNATAKA FPO DIRECTORY */}
         {!activeRoom && !showRoomCreator && (
           <div className="w-full flex flex-col overflow-hidden">
-            {/* Search row */}
-            <div className="p-3 bg-white border-b flex items-center space-x-2">
-              <div className="flex-1 bg-slate-100 px-2.5 py-1.5 rounded-full flex items-center space-x-1 border">
-                <Search className="w-3.5 h-3.5 text-slate-450" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search clubs, hubs or farmers..."
-                  className="bg-transparent w-full border-none outline-none text-xs text-slate-800 font-semibold placeholder-slate-400"
-                />
+            {/* If the farmer has active direct conversations with other farmers, show a quick access banner */}
+            {chatRooms.some((r) => r.type === 'private') && (
+              <div className="bg-emerald-50 px-3 py-1.5 border-b border-emerald-100 flex items-center justify-between text-xs shrink-0">
+                <span className="text-[10px] font-bold text-emerald-900">
+                  💬 Your Direct Chats ({chatRooms.filter((r) => r.type === 'private').length})
+                </span>
+                <div className="flex items-center space-x-1.5 overflow-x-auto max-w-[200px] scrollbar-none py-0.5">
+                  {chatRooms.filter((r) => r.type === 'private').map((room) => (
+                    <button
+                      key={room.id}
+                      onClick={() => setActiveRoom(room)}
+                      className="px-2 py-0.5 bg-white hover:bg-emerald-100 text-emerald-800 rounded-lg text-[9px] font-bold border border-emerald-200 shrink-0 truncate max-w-[120px]"
+                    >
+                      {room.title}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Hubs channel itemizers */}
-            <div className="flex-1 overflow-y-auto p-3.5 space-y-3 scrollbar-none">
-              <p className="text-[10px] uppercase font-black text-slate-450 tracking-wider">🌾 Active Karnataka Farming Clubs</p>
-              
-              {filteredRooms.map((room) => {
-                return (
-                  <div
-                    key={room.id}
-                    onClick={() => setActiveRoom(room)}
-                    className="p-3 bg-white hover:bg-emerald-50/50 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center cursor-pointer transition-all"
-                  >
-                    <div className="flex items-center space-x-3 truncate">
-                      <div className="w-9 h-9 rounded-full bg-emerald-50 text-emerald-800 flex items-center justify-center font-black text-sm shrink-0">
-                        {room.type === 'group' ? '🏘️' : '🧑‍🌾'}
-                      </div>
-                      <div className="truncate flex-1">
-                        <h4 className="text-xs font-black text-slate-800 truncate">{room.title}</h4>
-                        <p className="text-[10px] text-slate-500 font-bold truncate">
-                          {room.lastSenderName ? `${room.lastSenderName}: ` : ''}{room.lastMessage}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col items-end space-y-1 shrink-0 text-slate-400 pl-2">
-                      <span className="text-[8px] font-bold">Realtime</span>
-                      <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            {/* REAL GOVERNMENT-LISTED FPO DIRECTORY */}
+            <KarnatakaFpoDirectory
+              userDistrict={district}
+              triggerToast={triggerVisualToast}
+            />
           </div>
         )}
 
@@ -637,38 +615,42 @@ export function FarmerChatSystem({
             <h3 className="text-xs font-black uppercase text-slate-500 tracking-wider">🧑‍🌾 Contact Verified Karnataka Growers</h3>
             
             <div className="space-y-2.5 overflow-y-auto flex-1 scrollbar-none">
-              {farmersList.map((farmer) => {
-                if (farmer.uid === userId) return null;
-                const presence = onlinePresences[farmer.uid];
-
-                return (
-                  <div
-                    key={farmer.uid}
-                    onClick={() => startDirectChatWithFarmer(farmer)}
-                    className="p-3 rounded-2xl border bg-slate-50/30 hover:bg-emerald-50 cursor-pointer flex justify-between items-center transition-all"
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-black text-xs shrink-0">
-                        {farmer.avatarSeed}
-                      </div>
-                      <div>
-                        <div className="flex items-center space-x-1">
-                          <p className="text-xs font-bold text-slate-800">{farmer.displayName}</p>
-                          {farmer.verified && <UserCheck className="w-3.5 h-3.5 text-emerald-600" />}
+              {farmersList.length === 0 ? (
+                <div className="p-8 text-center space-y-2 text-slate-400">
+                  <p className="text-xs font-semibold">No other registered farmers found yet.</p>
+                  <p className="text-[10px]">Join the active district clubs to connect with neighbouring growers!</p>
+                </div>
+              ) : (
+                farmersList.map((farmer) => {
+                  if (farmer.uid === userId) return null;
+                  return (
+                    <div
+                      key={farmer.uid}
+                      onClick={() => startDirectChatWithFarmer(farmer)}
+                      className="p-3 rounded-2xl border bg-slate-50/30 hover:bg-emerald-50 cursor-pointer flex justify-between items-center transition-all"
+                    >
+                      <div className="flex items-center space-x-3">
+                        <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-black text-xs shrink-0">
+                          {farmer.avatarSeed}
                         </div>
-                        <p className="text-[9px] text-slate-400 font-bold">📍 {farmer.district} • {farmer.village}</p>
+                        <div>
+                          <div className="flex items-center space-x-1">
+                            <p className="text-xs font-bold text-slate-800">{farmer.displayName}</p>
+                            {farmer.verified && <UserCheck className="w-3.5 h-3.5 text-emerald-600" />}
+                          </div>
+                          <p className="text-[9px] text-slate-400 font-bold">📍 {farmer.district} {farmer.village ? `• ${farmer.village}` : ''}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-1">
+                        <span className="text-[9px] text-emerald-700 bg-emerald-50 font-bold px-2 py-0.5 rounded-lg border border-emerald-200">
+                          Message
+                        </span>
                       </div>
                     </div>
-
-                    {presence && (
-                      <div className="flex items-center space-x-1">
-                        <span className={`w-2 h-2 rounded-full ${presence.status === 'online' ? 'bg-green-500' : 'bg-slate-300'}`}></span>
-                        <span className="text-[8px] text-slate-400 font-bold uppercase">{presence.status}</span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           </div>
         )}

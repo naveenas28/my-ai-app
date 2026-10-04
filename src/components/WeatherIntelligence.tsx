@@ -49,7 +49,8 @@ import {
   getSavedLocations,
   toggleSavedLocation,
   isLocationSaved,
-  removeSavedLocation
+  removeSavedLocation,
+  formatTime12h
 } from '../services/weatherService';
 import {
   getWeatherForLocation,
@@ -58,6 +59,14 @@ import {
   saveWeatherSnapshotToFirestore
 } from '../services/weatherRepository';
 import { auth } from '../firebase';
+
+function getRelativeTime(timestampMs?: number): string {
+  if (!timestampMs) return 'recently';
+  const diffMinutes = Math.max(0, Math.floor((Date.now() - timestampMs) / 60000));
+  if (diffMinutes === 0) return 'just now';
+  if (diffMinutes === 1) return '1 min ago';
+  return `${diffMinutes} min ago`;
+}
 
 interface WeatherIntelligenceProps {
   currentLang?: LanguageCode;
@@ -1015,12 +1024,57 @@ export const WeatherIntelligence: React.FC<WeatherIntelligenceProps> = ({
             <div className="bg-gradient-to-br from-emerald-900 via-teal-900 to-slate-900 text-white rounded-3xl p-4 sm:p-5 shadow-2xl relative overflow-hidden border border-emerald-800/40 w-full box-border">
               <div className="relative z-10 space-y-3.5">
 
+                {/* 3-Tier Status Banner (LIVE WEATHER DATA / CACHED WEATHER DATA / OFFLINE FALLBACK) */}
+                {weatherData.dataSourceStatus === 'REAL DATA' ? (
+                  <div className="bg-emerald-950/70 border border-emerald-500/40 rounded-2xl p-2.5 flex items-center justify-between gap-2 text-xs backdrop-blur-md">
+                    <div className="flex items-center space-x-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
+                      <span className="font-black text-emerald-300 tracking-wider uppercase text-[11px]">
+                        🟢 LIVE WEATHER DATA
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-emerald-200 font-bold">
+                      Source: Open-Meteo • Live • Updated {formatTime12h(weatherData.lastUpdated)}
+                    </div>
+                  </div>
+                ) : weatherData.dataSourceStatus === 'CACHED DATA' ? (
+                  <div className="bg-amber-950/70 border border-amber-500/40 rounded-2xl p-2.5 flex items-center justify-between gap-2 text-xs backdrop-blur-md">
+                    <div className="flex items-center space-x-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0"></span>
+                      <span className="font-black text-amber-300 tracking-wider uppercase text-[11px]">
+                        🟡 CACHED WEATHER DATA
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-amber-200 font-bold">
+                      Source: Open-Meteo cache • Cached • Updated {getRelativeTime(weatherData.cachedAt)}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-orange-950/80 border border-orange-500/50 rounded-2xl p-2.5 flex items-center justify-between gap-2 text-xs backdrop-blur-md">
+                    <div className="flex items-center space-x-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-orange-400 shrink-0"></span>
+                      <span className="font-black text-orange-300 tracking-wider uppercase text-[11px]">
+                        🟠 OFFLINE FALLBACK
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-orange-200 font-bold">
+                      Live weather unavailable • Using fallback values
+                    </div>
+                  </div>
+                )}
+
                 {/* Top status bar */}
                 <div className="flex justify-between items-start gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center space-x-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0"></span>
-                      <span className="text-[10px] font-black tracking-widest text-emerald-300 uppercase">Live Weather Station</span>
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${
+                        weatherData.dataSourceStatus === 'REAL DATA' ? 'bg-emerald-400 animate-ping' :
+                        weatherData.dataSourceStatus === 'CACHED DATA' ? 'bg-amber-400' : 'bg-orange-400'
+                      }`}></span>
+                      <span className="text-[10px] font-black tracking-widest text-emerald-300 uppercase">
+                        {weatherData.dataSourceStatus === 'REAL DATA' ? 'LIVE WEATHER DATA' :
+                         weatherData.dataSourceStatus === 'CACHED DATA' ? 'CACHED WEATHER DATA' : 'OFFLINE FALLBACK'}
+                      </span>
                     </div>
                     <h2 className="text-lg sm:text-xl font-black tracking-tight text-white mt-1 break-words leading-snug">
                       {weatherData.location.name}
@@ -1030,10 +1084,11 @@ export const WeatherIntelligence: React.FC<WeatherIntelligenceProps> = ({
                   <button
                     onClick={() => loadWeather(currentLocation.lat, currentLocation.lon, currentLocation.name, true)}
                     disabled={isRefreshing}
-                    className="p-2 bg-white/10 hover:bg-white/20 active:scale-95 rounded-2xl border border-white/20 text-white cursor-pointer transition-all shrink-0"
-                    title="Pull latest live weather"
+                    className="p-2 bg-white/10 hover:bg-white/20 active:scale-95 rounded-2xl border border-white/20 text-white cursor-pointer transition-all shrink-0 flex items-center gap-1.5"
+                    title="Force refresh live weather from Open-Meteo"
                   >
                     <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                    <span className="text-[10px] font-bold hidden sm:inline">Refresh</span>
                   </button>
                 </div>
 
@@ -1050,10 +1105,14 @@ export const WeatherIntelligence: React.FC<WeatherIntelligenceProps> = ({
                     <p className="text-sm font-extrabold text-white mt-0.5 break-words">{weatherData.condition}</p>
                   </div>
 
-                  <div className="bg-white/10 backdrop-blur-md p-3 rounded-2xl border border-white/15 space-y-2 text-xs font-semibold text-emerald-100 flex flex-col justify-center">
+                  <div className="bg-white/10 backdrop-blur-md p-3 rounded-2xl border border-white/15 space-y-1.5 text-xs font-semibold text-emerald-100 flex flex-col justify-center">
                     <div className="flex justify-between items-center gap-2">
-                      <span className="text-[10px] text-slate-300 uppercase font-bold shrink-0">Rain Prob:</span>
-                      <span className="text-amber-300 font-extrabold font-mono text-sm">{weatherData.rainfallChance}%</span>
+                      <span className="text-[10px] text-slate-300 uppercase font-bold shrink-0">Current Rain Prob:</span>
+                      <span className="text-amber-300 font-extrabold font-mono text-sm">{weatherData.currentHourlyRainProb ?? weatherData.rainfallChance}%</span>
+                    </div>
+                    <div className="flex justify-between items-center gap-2">
+                      <span className="text-[10px] text-slate-300 uppercase font-bold shrink-0">Daily Max Rain:</span>
+                      <span className="text-amber-200 font-bold font-mono text-xs">{weatherData.dailyMaxRainProb ?? weatherData.dailyForecast?.[0]?.rainProb ?? 0}%</span>
                     </div>
                     <div className="flex justify-between items-center gap-2">
                       <span className="text-[10px] text-slate-300 uppercase font-bold shrink-0">Humidity:</span>
@@ -1068,8 +1127,14 @@ export const WeatherIntelligence: React.FC<WeatherIntelligenceProps> = ({
 
                 {/* Footer timestamp */}
                 <div className="pt-2 border-t border-white/10 flex justify-between items-center text-[9px] text-emerald-300 font-bold flex-wrap gap-1">
-                  <span>Updated: {new Date(weatherData.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                  <span>Data Source: Open-Meteo Satellite Met</span>
+                  <span>
+                    {weatherData.dataSourceStatus === 'REAL DATA'
+                      ? `Live • Updated ${formatTime12h(weatherData.lastUpdated)}`
+                      : weatherData.dataSourceStatus === 'CACHED DATA'
+                      ? `Cached • Updated ${getRelativeTime(weatherData.cachedAt)}`
+                      : 'Offline • Live weather unavailable'}
+                  </span>
+                  <span>Data Source: Open-Meteo</span>
                 </div>
               </div>
             </div>
@@ -1132,7 +1197,7 @@ export const WeatherIntelligence: React.FC<WeatherIntelligenceProps> = ({
                     <span>Micro-Climate Parameters</span>
                   </h3>
                   <span className="text-[9px] bg-emerald-50 text-emerald-800 font-extrabold px-2.5 py-0.5 rounded-full border border-emerald-100 shrink-0">
-                    Live Telemetry
+                    Live Weather Data
                   </span>
                 </div>
 
@@ -1149,10 +1214,13 @@ export const WeatherIntelligence: React.FC<WeatherIntelligenceProps> = ({
                   <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 space-y-1 min-w-0">
                     <div className="flex items-center space-x-1 text-slate-400 text-[9px] font-extrabold uppercase truncate">
                       <CloudRain className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                      <span>Rain Chance</span>
+                      <span>Rain Probability</span>
                     </div>
-                    <p className="text-base sm:text-lg font-black text-slate-800 font-mono">{weatherData.rainfallChance}%</p>
-                    <p className="text-[9px] text-slate-400 font-semibold truncate">{weatherData.precipitationMm.toFixed(1)} mm</p>
+                    <p className="text-base sm:text-lg font-black text-slate-800 font-mono">{weatherData.currentHourlyRainProb ?? weatherData.rainfallChance}%</p>
+                    <div className="text-[9px] text-slate-500 font-semibold space-y-0.5">
+                      <p className="truncate">Hourly: <span className="font-bold text-slate-700">{weatherData.currentHourlyRainProb ?? weatherData.rainfallChance}%</span></p>
+                      <p className="truncate">Daily Max: <span className="font-bold text-slate-700">{weatherData.dailyMaxRainProb ?? weatherData.dailyForecast?.[0]?.rainProb ?? 0}%</span></p>
+                    </div>
                   </div>
 
                   <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 space-y-1 min-w-0">
@@ -1358,21 +1426,41 @@ export const WeatherIntelligence: React.FC<WeatherIntelligenceProps> = ({
               </div>
             )}
 
-            {/* TAB 5: SEVERE WEATHER ALERTS */}
+            {/* TAB 5: AGRI WEATHER ADVISORIES */}
             {(activeTab === 'overview' || activeTab === 'alerts') && (
               <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-xl shadow-slate-100/50 space-y-3 w-full box-border">
                 <div className="flex justify-between items-center flex-wrap gap-1">
-                  <h3 className="font-black text-xs text-slate-800 uppercase tracking-wide flex items-center space-x-1.5">
-                    <ShieldAlert className="w-4 h-4 text-red-600 shrink-0" />
-                    <span>Direct Severe Warnings ({weatherData.alerts.length})</span>
-                  </h3>
-                  <span className="text-[9px] text-red-600 font-bold uppercase">Emergency</span>
+                  <div>
+                    <h3 className="font-black text-xs text-slate-800 uppercase tracking-wide flex items-center space-x-1.5">
+                      <ShieldAlert className="w-4 h-4 text-emerald-700 shrink-0" />
+                      <span>AgriVerse Weather Advisories ({weatherData.alerts.length})</span>
+                    </h3>
+                    <p className="text-[10px] text-slate-500 font-medium mt-0.5">
+                      AgriVerse Weather Advisory • Based on Open-Meteo weather data • Not an official government warning.
+                    </p>
+                  </div>
+                  <span className="text-[9px] bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold px-2 py-0.5 rounded-full uppercase">
+                    AgriVerse Rules
+                  </span>
                 </div>
+
+                {/* Offline Fallback Safety Notice */}
+                {weatherData.dataSourceStatus === 'OFFLINE FALLBACK' && (
+                  <div className="p-3 bg-orange-50 border border-orange-200 rounded-2xl text-[11px] text-orange-950 font-medium space-y-1">
+                    <span className="font-bold flex items-center gap-1.5 text-orange-900">
+                      <WifiOff className="w-3.5 h-3.5" />
+                      OFFLINE / FALLBACK DATA
+                    </span>
+                    <p className="text-[10px] text-orange-800">
+                      Live Open-Meteo weather server is unreachable. Displaying offline fallback data. Severe weather alerts are deactivated to prevent false alarms.
+                    </p>
+                  </div>
+                )}
 
                 {weatherData.alerts.length === 0 ? (
                   <div className="p-4 bg-emerald-50 rounded-2xl text-center space-y-1 border border-emerald-100">
                     <CheckCircle className="w-6 h-6 text-emerald-600 mx-auto" />
-                    <p className="text-xs font-extrabold text-emerald-900">No Active Severe Weather Warnings</p>
+                    <p className="text-xs font-extrabold text-emerald-900">No Active Severe Weather Advisories</p>
                     <p className="text-[10px] text-emerald-700 font-medium">Weather conditions are safe for normal agricultural field operations.</p>
                   </div>
                 ) : (
@@ -1380,27 +1468,100 @@ export const WeatherIntelligence: React.FC<WeatherIntelligenceProps> = ({
                     {weatherData.alerts.map((alert) => (
                       <div
                         key={alert.id}
-                        className={`p-3.5 sm:p-4 rounded-2xl border-2 transition-all space-y-2 ${
+                        className={`p-3.5 sm:p-4 rounded-2xl border-2 transition-all space-y-3 ${
                           alert.severity === 'critical'
-                            ? 'bg-red-50 border-red-200 text-red-900 animate-pulse'
-                            : 'bg-amber-50 border-amber-200 text-amber-900'
+                            ? 'bg-red-50/80 border-red-200 text-red-950'
+                            : 'bg-amber-50/80 border-amber-200 text-amber-950'
                         }`}
                       >
-                        <div className="flex justify-between items-start gap-2">
-                          <h4 className="text-xs font-black uppercase tracking-wide flex items-center space-x-1.5 min-w-0 flex-1">
-                            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-                            <span className="break-words">{alert.title}</span>
-                          </h4>
-                          <span className="text-[8px] bg-red-200 text-red-950 font-black px-2 py-0.5 rounded-full uppercase shrink-0">
-                            {alert.severity}
-                          </span>
+                        {/* Header: Type, Status Badge, Severity Badge */}
+                        <div className="flex justify-between items-start gap-2 flex-wrap">
+                          <div>
+                            <span className="text-[9px] font-black uppercase tracking-wider text-slate-500 block mb-0.5">
+                              AgriVerse Weather Advisory
+                            </span>
+                            <h4 className="text-sm font-black uppercase tracking-wide flex items-center space-x-1.5 min-w-0">
+                              <span className="break-words">{alert.title}</span>
+                            </h4>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                            {/* Live / Cached / Offline status badge */}
+                            {weatherData.dataSourceStatus === 'REAL DATA' ? (
+                              <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 text-[8px] font-black px-2 py-0.5 rounded-full uppercase flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                <span>LIVE ADVISORY</span>
+                              </span>
+                            ) : weatherData.dataSourceStatus === 'CACHED DATA' ? (
+                              <span className="bg-amber-100 text-amber-950 border border-amber-300 text-[8px] font-black px-2 py-0.5 rounded-full uppercase flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                                <span>CACHED WEATHER DATA</span>
+                              </span>
+                            ) : (
+                              <span className="bg-orange-100 text-orange-950 border border-orange-300 text-[8px] font-black px-2 py-0.5 rounded-full uppercase flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-orange-500"></span>
+                                <span>OFFLINE / FALLBACK DATA</span>
+                              </span>
+                            )}
+
+                            <span className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase shrink-0 ${
+                              alert.severity === 'critical' ? 'bg-red-200 text-red-950' : 'bg-amber-200 text-amber-950'
+                            }`}>
+                              Severity: {alert.severity === 'critical' ? 'High' : 'Moderate'}
+                            </span>
+                          </div>
                         </div>
 
-                        <p className="text-xs font-semibold leading-relaxed break-words">{alert.description}</p>
+                        {/* Threshold Reason Banner (when useful) */}
+                        {alert.ruleInputs?.thresholdReason && (
+                          <div className="bg-white/90 px-3 py-1.5 rounded-xl border border-slate-200/90 text-[10px] font-semibold text-slate-800 flex items-center gap-1.5">
+                            <span className="font-black text-amber-700 uppercase tracking-wide text-[9px] shrink-0">Condition Met:</span>
+                            <span className="text-slate-800 break-words">{alert.ruleInputs.thresholdReason}</span>
+                          </div>
+                        )}
 
-                        <div className="bg-white/80 p-2.5 rounded-xl text-[11px] font-bold border border-red-100">
-                          <span className="text-red-700 uppercase text-[9px] block mb-0.5 font-black">Recommended Farmer Action:</span>
-                          <span className="text-slate-800 break-words">{alert.recommendedAction}</span>
+                        {/* Real Measured / Forecast Values Grid */}
+                        <div className="bg-white p-3 rounded-xl border border-slate-200 text-[11px] shadow-2xs space-y-2">
+                          <span className="text-[9px] font-black uppercase tracking-wider text-slate-500 block">
+                            Measured & Forecast Weather Values:
+                          </span>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-slate-700">
+                            <div>
+                              <span className="text-slate-500 text-[10px] block">Rain probability:</span>
+                              <span className="font-extrabold text-slate-900 text-xs font-mono">{alert.ruleInputs?.rainProbability ?? weatherData.currentHourlyRainProb}%</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500 text-[10px] block">Expected precipitation:</span>
+                              <span className="font-extrabold text-slate-900 text-xs font-mono">{(alert.ruleInputs?.precipitationMm ?? weatherData.precipitationMm).toFixed(1)} mm</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500 text-[10px] block">Temperature:</span>
+                              <span className="font-extrabold text-slate-900 text-xs font-mono">{alert.ruleInputs?.temperature ?? weatherData.temperature}°C</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500 text-[10px] block">Wind speed:</span>
+                              <span className="font-extrabold text-slate-900 text-xs font-mono">{alert.ruleInputs?.windSpeed ?? weatherData.windSpeed} km/h</span>
+                            </div>
+                            <div className="col-span-2 sm:col-span-2">
+                              <span className="text-slate-500 text-[10px] block">Location:</span>
+                              <span className="font-extrabold text-slate-900 text-xs truncate block">{weatherData.location.name}</span>
+                            </div>
+                          </div>
+
+                          <div className="text-[9px] text-slate-500 pt-2 border-t border-slate-100 flex justify-between items-center flex-wrap gap-1 font-semibold">
+                            <span>Source: Based on Open-Meteo weather data</span>
+                            <span>Updated: {alert.timestamp}</span>
+                          </div>
+                        </div>
+
+                        {/* Farming Recommendation */}
+                        <div className="bg-white p-3 rounded-xl border border-emerald-200/80 shadow-2xs space-y-1">
+                          <span className="text-emerald-800 uppercase text-[9px] block font-black tracking-wider">
+                            Farming Recommendation:
+                          </span>
+                          <p className="text-xs font-extrabold text-slate-900 leading-snug break-words">
+                            "{alert.recommendedAction}"
+                          </p>
                         </div>
                       </div>
                     ))}

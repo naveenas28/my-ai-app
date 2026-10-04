@@ -1138,7 +1138,7 @@ export const ProfileTabView: React.FC<ProfileTabViewProps> = ({
       )}
 
       {/* 12. SUB-VIEW: KYC & GOVT BENEFITS */}
-      {activeProfileTool === 'kyc' && (
+      {(activeProfileTool === 'kyc' || activeProfileTool === 'schemes') && (
         <div className="bg-white rounded-3xl border border-slate-100 p-2 shadow-sm">
           <KYCGovernmentBenefits
             uid={firebaseAuthUid || auth.currentUser?.uid || 'guest_uid'}

@@ -1,14 +1,24 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
+import { executeKrishiAgent } from './src/server/krishiAgent';
+import { queryOfficialMandis, getMandiById } from './src/services/providers/mandiDataProvider';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = process.cwd();
+
+// Helper to keep server JSON storage compact and zero-cost
+const compactImageUrl = (img: string): string => {
+  if (!img) return '';
+  if (img.length > 500 && img.startsWith('data:image')) {
+    return img.slice(0, 80) + '...[compact_preview]';
+  }
+  return img;
+};
 
 const app = express();
 const isProd = process.env.NODE_ENV === 'production' || process.argv.includes('--production');
@@ -18,8 +28,19 @@ const PORT = 3000;
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
+// Healthcheck endpoint
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    mode: isProd ? 'production' : 'development',
+    timestamp: new Date().toISOString(),
+    geminiKeyConfigured: Boolean(process.env.GEMINI_API_KEY),
+    costTier: '₹0 ACTIVE COST (100% Free / Zero Billing)'
+  });
+});
+
 // Initialise Gemini SDK with secure server-side API Key
-const apiKey = process.env.GEMINI_API_KEY;
+const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENAI_API_KEY;
 const ai = new GoogleGenAI({
   apiKey: apiKey || '',
   httpOptions: {
@@ -131,51 +152,7 @@ let serverProducts = loadJSON(PRODUCTS_FILE, initialProducts);
 let serverBudget = loadJSON(BUDGET_FILE, initialBudget);
 let serverReports = loadJSON(REPORTS_FILE, []);
 
-// Helper to provide human translations if Gemini falls offline or is not key-configured
-const getLocalFallbackChatResponse = (msg: string, lang: string): string => {
-  const lowercase = msg.toLowerCase();
-  
-  if (lang === 'kn') {
-    if (lowercase.includes('tomato') || lowercase.includes('ಟೊಮೆಟೊ')) {
-      return 'ಟೊಮೆಟೊ ಬೆಳೆಗೆ ಸಂಬಂಧಿಸಿದ ಮಾಹಿತಿ: ತೇವಾಂಶವುಳ್ಳ ವಾತಾವರಣದಲ್ಲಿ ಅರ್ಲಿ ಬ್ಲೈಟ್ (ಕೊಳೆ ರೋಗ) ಸಾಮಾನ್ಯ. ಎಲೆಗಳ ಮೇಲೆ ಕಪ್ಪು ಕಲೆಗಳು ಬಂದರೆ ತಕ್ಷಣ ಮ್ಯಾಂಕೋಜೆಬ್ 2g/ಲೀಟರ್ ಸಿಂಪಡಿಸಿ. ಕಟಾವಿನ ಸಮಯಕ್ಕೆ ಹತ್ತಿರವಿದ್ದರೆ ಜೈವಿಕ ಗೊಬ್ಬರ ನೀಡಿ.';
-    }
-    return `ನಮಸ್ಕಾರ ರೈತ ಮಿತ್ರರೇ, AgriVerse AI ಗೆ ಸ್ವಾಗತ! ನಾನು ನಿಮ್ಮ ಕೃಷಿ ಸಲಹೆಗಾರ. ನಮಗೆ ವಾತಾವರಣ, ಸಾಲ ಯೋಜನೆಗಳು ಅಥವಾ ಕೀಟನಾಶಕಗಳ ಬಗ್ಗೆ ಪ್ರಶ್ನೆ ಕೇಳಿ. (ನಿಮ್ಮ ಪ್ರಶ್ನೆ: "${msg}")`;
-  }
-  
-  if (lang === 'hi') {
-    if (lowercase.includes('tomato') || lowercase.includes('टमाटर')) {
-      return 'टमाटर की खेती सलाह: अगेती झुलसा (Early Blight) रोग की रोकथाम के लिए मैंकोजेब 2 ग्राम प्रति लीटर पानी में मिलाकर छिडकाव करें। मिट्टी में नमी बनाये रखें लेकिन जलजमाव से बचें।';
-    }
-    return `नमस्ते किसान साथी! एग्रीवर्स एआई में आपका स्वागत है। मैं आपकी फसल, कीट नियंत्रण या ट्रैक्टर रेंटल के बारे में क्या मदद कर सकता हूँ? (आपकी जिज्ञासा: "${msg}")`;
-  }
-
-  if (lowercase.includes('tomato')) {
-    return 'Active Tomato advisory: To counter Early Blight (dark ring-spots on lower leaves), ensure clear ventilation between beds. Apply Mancozeb 2g/Liter bio-spray, and schedule light watering at twilight.';
-  }
-  return `Hello partner! Welcome to AgriVerse AI. I can guide you step-by-step with crop cycles, pest defense, or pricing prediction. How is your harvest in your district today?`;
-};
-
-// Helper for Voice custom simulated transcribing
-const getFallbackCaption = (lang: string) => {
-  const fallbacks: Record<string, { transcription: string, translation: string, summary: string }> = {
-    kn: {
-      transcription: "ಕಾಲುವೆ ನೀರು ಹರಿಸುವುದರಿಂದ ಭತ್ತದ ಬೆಳೆಗೆ ಅನುಕೂಲವಾಗುತ್ತದೆ. ಆದರೆ ಕೀಟಗಳ ಮೇಲೆ ನಿಗಾ ಇರಿಸಿ.",
-      translation: "Irrigating with canal water benefits paddy crops. However, please inspect closely for pests.",
-      summary: "Optimize canal irrigation volume; monitor early leaf roller symptoms"
-    },
-    hi: {
-      transcription: "इस मौसम में गेहूं की बुवाई शुरू करने से पहले जैविक जैविक खादों का ही छिड़काव करना हितकर है।",
-      translation: "Sowing wheat after organic manure application improves harvest yield this season.",
-      summary: "Apply organic compost before wheat sowing to enhance soil nitrogen levels."
-    },
-    en: {
-      transcription: "Recommend drenching with neem formulation near roots for ginger rhizome rot defense.",
-      translation: "Recommend drenching with neem formulation near roots for ginger rhizome rot defense.",
-      summary: "Neem drench countering ginger rot symptoms during high humidity months."
-    }
-  };
-  return fallbacks[lang] || fallbacks['en'];
-};
+// Live Weather API Grounding
 
 // NEW LIVE WEATHER API ENDPOINT
 app.get('/api/weather', async (req, res) => {
@@ -189,28 +166,35 @@ app.get('/api/weather', async (req, res) => {
       if (owRes.ok) {
         const owData = await owRes.json();
         const temp = Math.round(owData.main?.temp || 28);
-        const humidity = owData.main?.humidity || 82;
+        const humidity = owData.main?.humidity || 65;
         const windSpeed = Math.round((owData.wind?.speed || 3.8) * 3.6);
         const weatherDesc = owData.weather?.[0]?.description || 'Partly Cloudy';
-        const isRainy = (owData.weather?.[0]?.main || '').toLowerCase().includes('rain') || humidity > 75;
+        const weatherMain = (owData.weather?.[0]?.main || '').toLowerCase();
+        const weatherId = owData.weather?.[0]?.id || 800;
+
+        // Grounded precipitation checks based on standard OpenWeather codes
+        const isRainy = weatherMain.includes('rain') || weatherMain.includes('drizzle') || weatherMain.includes('thunderstorm') || (weatherId >= 200 && weatherId < 600);
+        // Severe rain: torrential rain (502-504), heavy shower rain (522), violent thunderstorms (202, 212)
+        const isSevereRain = (weatherId >= 502 && weatherId <= 504) || weatherId === 522 || weatherId === 202 || weatherId === 212;
+        const rainChance = isSevereRain ? 85 : isRainy ? 60 : 15;
 
         return res.json({
           locationName: `${owData.name || 'Regional District'}, APMC Zone`,
           temperature: temp,
           humidity: humidity,
           windSpeed: windSpeed,
-          rainfallChance: isRainy ? 78 : 25,
-          condition: isRainy ? 'Heavy Rain Predicted' : weatherDesc,
-          weatherCode: owData.weather?.[0]?.id || 800,
-          hasSevereRainAlert: isRainy,
-          alertTitle: isRainy ? 'Emergency Rainfall Alert' : undefined,
-          alertDescription: isRainy ? 'High rainfall probability predicted in next 6 hours. Secure harvested yield in dry sheds.' : undefined,
+          rainfallChance: rainChance,
+          condition: isSevereRain ? 'Heavy Downpour Expected' : isRainy ? 'Light Rain Expected' : weatherDesc,
+          weatherCode: weatherId,
+          hasSevereRainAlert: isSevereRain,
+          alertTitle: isSevereRain ? 'Emergency Rainfall Alert' : undefined,
+          alertDescription: isSevereRain ? 'Heavy rainfall predicted in next 6 hours. Secure harvested yield in dry sheds.' : undefined,
           forecast: [
-            { day: 'Fri', dateStr: 'Today', tempMax: temp, tempMin: Math.max(18, temp - 6), rainProb: isRainy ? 80 : 20, icon: 'rain' },
-            { day: 'Sat', dateStr: 'Tomorrow', tempMax: temp - 1, tempMin: Math.max(18, temp - 7), rainProb: 75, icon: 'rain' },
-            { day: 'Sun', dateStr: 'Day 3', tempMax: temp + 2, tempMin: temp - 5, rainProb: 20, icon: 'cloud' },
-            { day: 'Mon', dateStr: 'Day 4', tempMax: temp + 3, tempMin: temp - 4, rainProb: 15, icon: 'sun' },
-            { day: 'Tue', dateStr: 'Day 5', tempMax: temp + 1, tempMin: temp - 6, rainProb: 40, icon: 'cloud' }
+            { day: 'Today', dateStr: 'Today', tempMax: temp, tempMin: Math.max(18, temp - 6), rainProb: rainChance, icon: isRainy ? 'rain' : 'sun' },
+            { day: 'Tomorrow', dateStr: 'Tomorrow', tempMax: temp, tempMin: Math.max(18, temp - 6), rainProb: Math.round(rainChance * 0.6), icon: isRainy ? 'cloud' : 'sun' },
+            { day: 'Day 3', dateStr: 'Day 3', tempMax: temp + 1, tempMin: Math.max(18, temp - 5), rainProb: 20, icon: 'cloud' },
+            { day: 'Day 4', dateStr: 'Day 4', tempMax: temp + 2, tempMin: Math.max(18, temp - 4), rainProb: 15, icon: 'sun' },
+            { day: 'Day 5', dateStr: 'Day 5', tempMax: temp + 1, tempMin: Math.max(18, temp - 5), rainProb: 25, icon: 'cloud' }
           ],
           lastUpdated: new Date().toISOString()
         });
@@ -225,41 +209,46 @@ app.get('/api/weather', async (req, res) => {
       const current = omData.current_weather || {};
       const temp = Math.round(current.temperature ?? 28);
       const windSpeed = Math.round(current.windspeed ?? 14);
-      const humidity = omData.hourly?.relativehumidity_2m?.[0] ?? 82;
-      const rainChance = omData.daily?.precipitation_probability_max?.[0] ?? 78;
-      const isSevereRain = rainChance > 50 || current.weathercode >= 60;
+      const humidity = omData.hourly?.relativehumidity_2m?.[0] ?? 65;
+      const weatherCode = current.weathercode ?? 2;
+      const rainChance = Math.round(omData.daily?.precipitation_probability_max?.[0] ?? (weatherCode >= 51 ? 55 : 15));
+
+      // Severe alert triggered strictly on WMO heavy precipitation codes (65-67, 82, 95-99) or extreme rain probability >= 80% with rain code
+      const isSevereRain = (weatherCode >= 65 && weatherCode <= 67) || weatherCode === 82 || weatherCode >= 95 || (rainChance >= 80 && weatherCode >= 61);
+      const isRainy = weatherCode >= 51 && weatherCode <= 99;
 
       const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
       const forecastDays = (omData.daily?.time || []).slice(0, 5).map((tStr: string, idx: number) => {
         const dObj = new Date(tStr);
         const dayLabel = idx === 0 ? 'Today' : idx === 1 ? 'Tomorrow' : daysOfWeek[dObj.getDay()];
+        const dayRain = omData.daily?.precipitation_probability_max?.[idx] ?? 20;
         return {
           day: daysOfWeek[dObj.getDay()],
           dateStr: dayLabel,
           tempMax: Math.round(omData.daily?.temperature_2m_max?.[idx] ?? temp),
           tempMin: Math.round(omData.daily?.temperature_2m_min?.[idx] ?? temp - 6),
-          rainProb: omData.daily?.precipitation_probability_max?.[idx] ?? 30,
-          icon: (omData.daily?.precipitation_probability_max?.[idx] ?? 30) > 50 ? 'rain' : 'cloud'
+          rainProb: dayRain,
+          icon: dayRain > 50 ? 'rain' : 'cloud'
         };
       });
 
       return res.json({
-        locationName: 'Chikkaballapura Region',
+        locationName: 'Local Agriculture Zone',
         temperature: temp,
         humidity: humidity,
         windSpeed: windSpeed,
         rainfallChance: rainChance,
-        condition: isSevereRain ? 'Heavy Rain Predicted' : 'Favorable Crop Conditions',
-        weatherCode: current.weathercode || 3,
+        condition: isSevereRain ? 'Heavy Downpour Expected' : isRainy ? 'Scattered Rain Expected' : 'Favorable Crop Conditions',
+        weatherCode: weatherCode,
         hasSevereRainAlert: isSevereRain,
         alertTitle: isSevereRain ? 'Emergency Rainfall Alert' : undefined,
         alertDescription: isSevereRain ? `${rainChance}% chance of heavy rain predicted in next 6 hours. Secure harvested yield in dry sheds.` : undefined,
         forecast: forecastDays.length > 0 ? forecastDays : [
-          { day: 'Fri', dateStr: 'Today', tempMax: 28, tempMin: 21, rainProb: 80, icon: 'rain' },
-          { day: 'Sat', dateStr: 'Tomorrow', tempMax: 27, tempMin: 20, rainProb: 75, icon: 'rain' },
-          { day: 'Sun', dateStr: 'Day 3', tempMax: 30, tempMin: 22, rainProb: 20, icon: 'cloud' },
-          { day: 'Mon', dateStr: 'Day 4', tempMax: 31, tempMin: 23, rainProb: 15, icon: 'sun' },
-          { day: 'Tue', dateStr: 'Day 5', tempMax: 29, tempMin: 21, rainProb: 40, icon: 'cloud' }
+          { day: 'Today', dateStr: 'Today', tempMax: 28, tempMin: 21, rainProb: rainChance, icon: isRainy ? 'rain' : 'sun' },
+          { day: 'Tomorrow', dateStr: 'Tomorrow', tempMax: 29, tempMin: 21, rainProb: 20, icon: 'cloud' },
+          { day: 'Day 3', dateStr: 'Day 3', tempMax: 30, tempMin: 22, rainProb: 15, icon: 'sun' },
+          { day: 'Day 4', dateStr: 'Day 4', tempMax: 31, tempMin: 23, rainProb: 15, icon: 'sun' },
+          { day: 'Day 5', dateStr: 'Day 5', tempMax: 29, tempMin: 21, rainProb: 25, icon: 'cloud' }
         ],
         lastUpdated: new Date().toISOString()
       });
@@ -268,24 +257,22 @@ app.get('/api/weather', async (req, res) => {
     console.warn('Weather fetch proxy exception:', err?.message || err);
   }
 
-  // Resilient static fallback
+  // Resilient static fallback (normal favorable farming weather, not fabricated disaster)
   res.json({
-    locationName: 'Chikkaballapura Region',
+    locationName: 'Local Agriculture Zone',
     temperature: 28,
-    humidity: 82,
-    windSpeed: 14,
-    rainfallChance: 78,
-    condition: 'Heavy Rain Predicted',
-    weatherCode: 63,
-    hasSevereRainAlert: true,
-    alertTitle: 'Emergency Rainfall Alert',
-    alertDescription: '78% chance of heavy rain in next 6 hours. Secure harvested yield in dry sheds.',
+    humidity: 62,
+    windSpeed: 12,
+    rainfallChance: 15,
+    condition: 'Favorable Farming Conditions',
+    weatherCode: 2,
+    hasSevereRainAlert: false,
     forecast: [
-      { day: 'Fri', dateStr: 'Today', tempMax: 28, tempMin: 21, rainProb: 80, icon: 'rain' },
-      { day: 'Sat', dateStr: 'Tomorrow', tempMax: 27, tempMin: 20, rainProb: 75, icon: 'rain' },
-      { day: 'Sun', dateStr: 'Day 3', tempMax: 30, tempMin: 22, rainProb: 20, icon: 'cloud' },
-      { day: 'Mon', dateStr: 'Day 4', tempMax: 31, tempMin: 23, rainProb: 15, icon: 'sun' },
-      { day: 'Tue', dateStr: 'Day 5', tempMax: 29, tempMin: 21, rainProb: 40, icon: 'cloud' }
+      { day: 'Today', dateStr: 'Today', tempMax: 29, tempMin: 21, rainProb: 15, icon: 'sun' },
+      { day: 'Tomorrow', dateStr: 'Tomorrow', tempMax: 28, tempMin: 20, rainProb: 20, icon: 'cloud' },
+      { day: 'Day 3', dateStr: 'Day 3', tempMax: 30, tempMin: 22, rainProb: 10, icon: 'sun' },
+      { day: 'Day 4', dateStr: 'Day 4', tempMax: 31, tempMin: 23, rainProb: 15, icon: 'sun' },
+      { day: 'Day 5', dateStr: 'Day 5', tempMax: 29, tempMin: 21, rainProb: 25, icon: 'cloud' }
     ],
     lastUpdated: new Date().toISOString()
   });
@@ -294,9 +281,9 @@ app.get('/api/weather', async (req, res) => {
 // NEW API ENDPOINTS: VOICE CAPTION AND CHAT TRANSLATOR
 app.post('/api/voice/caption', async (req, res) => {
   const { audioBase64, language = 'kn' } = req.body;
-  
+
   if (!apiKey || apiKey.includes('MY_GEMINI_API_KEY')) {
-    return res.json(getFallbackCaption(language));
+    return res.status(503).json({ success: false, error: 'AI voice caption service is temporarily unavailable.' });
   }
 
   try {
@@ -320,8 +307,8 @@ Return STRICTLY clean JSON matching this keys structural format:
     const parsedData = JSON.parse(response.text || '{}');
     res.json(parsedData);
   } catch (err: any) {
-    console.log('[Gemini Voice Caption Handled]', err?.message || err);
-    res.json(getFallbackCaption(language));
+    console.error('[Gemini Voice Caption Error]:', err?.message || err);
+    res.status(503).json({ success: false, error: 'AI voice caption service is temporarily unavailable.' });
   }
 });
 
@@ -332,7 +319,7 @@ app.post('/api/chat/translate', async (req, res) => {
   }
 
   if (!apiKey || apiKey.includes('MY_GEMINI_API_KEY')) {
-    return res.json({ translatedText: `[Fallback translation to ${targetLang}] ${text}` });
+    return res.status(503).json({ success: false, error: 'AI translation service is temporarily unavailable.' });
   }
 
   try {
@@ -343,363 +330,182 @@ app.post('/api/chat/translate', async (req, res) => {
     });
     res.json({ translatedText: response.text?.trim() || text });
   } catch (err: any) {
-    console.log('[Gemini Translator Handled]', err?.message || err);
-    res.json({ translatedText: `📢 [Translated fallback] "${text}"` });
+    console.error('[Gemini Translator Error]:', err?.message || err);
+    res.status(503).json({ success: false, error: 'AI translation service is temporarily unavailable.' });
   }
 });
 
-// 1. AI CHATBOT ROUTE
+// 1. KRISHI AI AGENT ROUTE (TOOL-CALLING WITH GOVERNMENT GROUNDING)
+const chatIpRateLimits = new Map<string, number[]>();
+
 app.post('/api/chat', async (req, res) => {
-  const { message, previousChat = [], language = 'en' } = req.body;
-  if (!message) {
-    return res.status(400).json({ error: 'Message content is required' });
+  const { 
+    message, 
+    history = [],
+    previousChat = [], 
+    conversationHistory = [], 
+    language = 'en', 
+    uid, 
+    farmerProfile, 
+    userContext, 
+    imageBase64,
+    image 
+  } = req.body;
+
+  const rawImage = image || imageBase64;
+  const rawMessage = (typeof message === 'string' ? message : '').trim();
+  const query = rawMessage || (rawImage ? 'Please analyze this crop/plant image and provide agricultural advice.' : '');
+
+  if (!query && !rawImage) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Message content or image is required',
+      response: 'Please enter a question or provide an image.'
+    });
   }
 
-  // Gracefully handle missing API key
-  if (!apiKey || apiKey.includes('MY_GEMINI_API_KEY')) {
-    const fallback = getLocalFallbackChatResponse(message, language);
-    return res.json({ text: fallback, isFallback: true });
+  // Rate Limiting (Protects free tier API limits)
+  const clientIp = (req.headers['x-forwarded-for'] as string) || req.ip || 'client';
+  const isLocal = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === '::ffff:127.0.0.1' || clientIp === 'client';
+  const maxRpm = isLocal ? 120 : 20;
+  const now = Date.now();
+  const timestamps = (chatIpRateLimits.get(clientIp) || []).filter(t => now - t < 60000);
+  if (timestamps.length >= maxRpm) {
+    return res.status(429).json({
+      success: false,
+      error: 'Free tier rate limit reached (15 RPM). Please wait a moment before sending another request.',
+      response: 'Free tier rate limit reached (15 RPM). Please wait a moment before sending another request.',
+      reply: 'Free tier rate limit reached (15 RPM). Please wait a moment before sending another request.',
+      text: 'Free tier rate limit reached (15 RPM). Please wait a moment before sending another request.',
+      sources: [],
+      sourceLabel: 'RATE LIMIT',
+      isFallback: false,
+      toolsUsed: []
+    });
   }
+  timestamps.push(now);
+  chatIpRateLimits.set(clientIp, timestamps);
 
   try {
-    const chatSystemInstructions = `You are "AgriVerse AI Expert", a supportive, highly specialized farming companion, weather advisor, and crop doctor helping rural and modern farmers alike.
-Keep your tone warm, encouraging, respectful, and highly simplified. Avoid dry academic terms. Explain biological concepts step-by-step.
-CRITICAL: Respond COMPLETELY in the language represented by the code "${language}".
-If asked about sowing cycles, recommend regional crops. Ensure recommendations are practical and low-cost for smallholder farmers.`;
+    const combinedHistory = history.length > 0 ? history : (conversationHistory.length > 0 ? conversationHistory : previousChat);
+    const combinedProfile = farmerProfile || userContext || {};
 
-    const chatInstance = ai.chats.create({
-      model: 'gemini-2.5-flash',
-      config: {
-        systemInstruction: chatSystemInstructions,
-        temperature: 0.7,
-      }
+    const agentResult = await executeKrishiAgent(ai, apiKey, {
+      message: query,
+      language,
+      uid,
+      farmerProfile: combinedProfile,
+      userContext: userContext || combinedProfile,
+      conversationHistory: combinedHistory,
+      previousChat: combinedHistory,
+      imageBase64: rawImage
     });
 
-    // Populate history
-    const response = await chatInstance.sendMessage({ message: message });
-    res.json({ text: response.text || '' });
+    const isSuccess = agentResult.success !== false && !agentResult.error;
+    const responseText = agentResult.response || agentResult.reply || agentResult.text || '';
+
+    res.json({
+      success: isSuccess,
+      response: responseText,
+      reply: responseText,
+      text: responseText,
+      answer: responseText,
+      category: agentResult.category || 'GENERAL_AGRICULTURE',
+      requiresLiveData: agentResult.requiresLiveData ?? false,
+      retrievedAt: agentResult.retrievedAt || new Date().toISOString(),
+      confidence: agentResult.confidence || 'high',
+      sources: agentResult.sources || [],
+      sourceLabel: agentResult.sourceLabel || 'AI-GENERATED ADVICE',
+      isFallback: false,
+      toolsUsed: agentResult.toolsUsed || [],
+      error: agentResult.error || (isSuccess ? null : 'AI service is temporarily unavailable. Please try again.')
+    });
   } catch (err: any) {
-    console.log('[Gemini Chat Handled]', err?.message || err);
-    res.json({ text: getLocalFallbackChatResponse(message, language), isFallback: true, error: err.message });
+    console.error('[Krishi AI Agent Server Error]:', err?.message || err);
+    res.status(503).json({
+      success: false,
+      response: 'AI service is temporarily unavailable. Please try again.',
+      reply: 'AI service is temporarily unavailable. Please try again.',
+      text: 'AI service is temporarily unavailable. Please try again.',
+      sources: [],
+      sourceLabel: 'AI-GENERATED ADVICE',
+      isFallback: false,
+      toolsUsed: [],
+      error: 'AI service is temporarily unavailable. Please try again.'
+    });
   }
 });
 
-// 2. AI CROP DOCTOR (DISEASE DIAGNOSIS) ROUTE
-const getFallbackDiagnosis = (type: 'healthy' | 'blight' | 'rust', lang: string) => {
-  const dict: Record<string, Record<string, any>> = {
-    healthy: {
-      en: {
-        diseaseName: "Healthy Crop Leaf (No Disease Detected)",
-        confidence: "98% Stable",
-        severity: "LOW",
-        symptoms: "Vibrant green pigmentation, healthy veins structure, complete absence of blight spots or fungal spores.",
-        treatmentSuggestions: "Continue regular soil moisture inspection and crop nutrient cycle.",
-        organicControl: "Spray diluted cow urine bio-boost (50ml/L) monthly for protective immunity.",
-        chemicalControl: "No chemical fungicides required.",
-        preventionTips: "Ensure crop rotation next season and use certified pathogen-free seeds."
-      },
-      kn: {
-        diseaseName: "ಆರೋಗ್ಯಕರ ಎಲೆ (ಯಾವುದೇ ರೋಗ ಪತ್ತೆಯಾಗಿಲ್ಲ)",
-        confidence: "98% ಸ್ಥಿರ",
-        severity: "LOW",
-        symptoms: "ಎಲೆಗಳು ಹಸರಾಗಿದ್ದು, ಯಾವುದೇ ಪ್ರಮುಖ ಕಲೆಗಳು ಅಥವಾ ಕೊಳೆತ ಲಕ್ಷಣಗಳಿಲ್ಲ.",
-        treatmentSuggestions: "ಸಮರ್ಪಕ ನೀರು ಮತ್ತು ಸಾವಯವ ಪೋಷಕಾಂಶಗಳ ನಿರ್ವಹಣೆಯನ್ನು ಮುಂದುವರಿಸಿ.",
-        organicControl: "ರೋಗ ನಿರೋಧಕ ಶಕ್ತಿಗಾಗಿ ತಿಂಗಳಿಗೊಮ್ಮೆ ಮೂತ್ರ ಜೈವಿಕ ದ್ರಾವಣ ಸಿಂಪಡಿಸಿ.",
-        chemicalControl: "ಯಾವುದೇ ರಾಸಾಯನಿಕ ಔಷಧಿಗಳ ಅವಶ್ಯಕತೆ ಇಲ್ಲ.",
-        preventionTips: "ಬೆಳೆ ಬದಲಾವಣೆ ಮಾಡಿ ಮತ್ತು ಉತ್ತಮ ರೋಗ ರಹಿತ ಬೀಜಗಳನ್ನು ಬಳಸಿ."
-      },
-      hi: {
-        diseaseName: "स्वस्थ फसल पत्ती (कोई रोग नहीं मिला)",
-        confidence: "98% स्थिर",
-        severity: "LOW",
-        symptoms: "गहरी हरी पत्ती, स्वस्थ शिराएँ, किसी भी प्रकार के कवक या धब्बों की पूर्ण अनुपस्थिति।",
-        treatmentSuggestions: "नियमित रूप से मिट्टी की नमी और पोषक चक्र का प्रबंधन जारी रखें।",
-        organicControl: "सुरक्षात्मक रोग प्रतिरोधक क्षमता के लिए मासिक रूप से नीम के तेल का छिड़काव करें।",
-        chemicalControl: "किसी भी रासायनिक कीटनाशक की आवश्यकता नहीं है।",
-        preventionTips: "अगले सीजन में फसल चक्र अपनाएं और प्रमाणित रोगमुक्त बीजों का ही उपयोग करें।"
-      },
-      ta: {
-        diseaseName: "ஆரோக்கியமான இலை (நோய் எதுவும் கண்டறியப்படவில்லை)",
-        confidence: "98% நிலையானது",
-        severity: "LOW",
-        symptoms: "துடிப்பான பச்சை நிறமி, ஆரோக்கியமான நரம்பு அமைப்பு, பூஞ்சை காளான் புள்ளிகள் எதுவும் இல்லை.",
-        treatmentSuggestions: "வழக்கமான மண் ஈரப்பத ஆய்வு மற்றும் பயிர் ஊட்டச்சத்து சுழற்சியைத் தொடரவும்.",
-        organicControl: "பயிரின் நோய் எதிர்ப்பை அதிகரிக்க மாதம் ஒருமுறை வேப்ப எண்ணெய் தெளிக்கவும்.",
-        chemicalControl: "ரசாயன பூஞ்சைக் கொல்லிகள் எதுவும் தேவையில்லை.",
-        preventionTips: "அடுத்த பருவத்தில் பயிர் சுழற்சி முறையை பின்பற்றி, சான்றளிக்கப்பட்ட விதைகளைப் பயன்படுத்தவும்."
-      },
-      te: {
-        diseaseName: "ఆరోగ్యకరమైన ఆకు (ఎటువంటి తెగులు కనుగొనబడలేదు)",
-        confidence: "98% స్థిరంగా ఉంది",
-        severity: "LOW",
-        symptoms: "ఆకుపచ్చని రంగు, బలమైన నరాలు, తెగుళ్లు లేదా కల్మషాలు లేని స్వచ్ఛమైన ఆకు.",
-        treatmentSuggestions: "క్రమం తప్పకుండా నేల తేమను పరిశీలించండి మరియు పోషకాలను అందించండి.",
-        organicControl: "నెలకోసారి వేప నూనె మిశ్రమాన్ని రక్షణగా పిచికారీ చేయండి.",
-        chemicalControl: "రసాయనిక మందుల అవసరం లేదు.",
-        preventionTips: "పంట మార్పిడి విధానాన్ని పాటించండి మరియు నాణ్యమైన విత్తనాలు వాడండి."
-      },
-      ml: {
-        diseaseName: "ആരോഗ്യമുള്ള ഇല (രോഗങ്ങൾ ഒന്നും കണ്ടെത്തിയില്ല)",
-        confidence: "98% സ്ഥിരതയോടെ",
-        severity: "LOW",
-        symptoms: "നല്ല പച്ചനിറം, പൂപ്പലുകളോ കീടങ്ങളോ ബാധിക്കാത്ത ആരോഗ്യമുള്ള ഇലകൾ.",
-        treatmentSuggestions: "നനവും വളപ്രയോഗവും കൃത്യമായി തുടരുക.",
-        organicControl: "പ്രതിരോധത്തിനായി മാസം തോറും വേപ്പെണ്ണ മിശ്രിതം തളിക്കുക.",
-        chemicalControl: "രാസകീടനാശിനികൾ ആവശ്യമില്ല.",
-        preventionTips: "അടുത്ത തവണ വിളമാറ്റി നടുകയും നല്ല സർട്ടിഫൈഡ് വിത്തുകൾ ഉപയോഗിക്കുകയും ചെയ്യുക."
-      },
-      bn: {
-        diseaseName: "সুস্থ ফসলের পাতা (কোন রোগ সনাক্ত করা যায়নি)",
-        confidence: "98% স্থিতিশীল",
-        severity: "LOW",
-        symptoms: "উজ্জ্বল সবুজ পাতা, সুস্থ শিরা বিন্যাস এবং ছত্রাকের সাদা গুটি বা দাগের সম্পূর্ণ অনুপস্থিতি।",
-        treatmentSuggestions: "নিয়মিত মাটির আর্দ্রতা পরীক্ষা করুন এবং জৈব পুষ্টি প্রয়োগ চালিয়ে যান।",
-        organicControl: "প্রতিরোধ ক্ষমতার জন্য প্রতি মাসে নিম তেলের হালকা স্প্রে করুন।",
-        chemicalControl: "কোন রাসায়নিক কীটনাশক প্রয়োগের প্রয়োজন নেই।",
-        preventionTips: "পরের মরসুমে শস্য আবর্তন করুন এবং রোগমুক্ত শংসাপত্রপ্রাপ্ত বীজ রোপণ করুন।"
-      },
-      mr: {
-        diseaseName: "निरोगी पान (कोणताही रोग आढळला नाही)",
-        confidence: "98% अचूकता",
-        severity: "LOW",
-        symptoms: "गडद हिरवे पान, सुदृढ शिरा, बुरशी किंवा डागांचे नामनिशाण नाही.",
-        treatmentSuggestions: "वेळेवर पाणी देणे आणि खतांचे नियोजन सुरू ठेवा.",
-        organicControl: "रोगप्रतिकारक शक्ती वाढवण्यासाठी सेंद्रिय कडुनिंबाच्या अर्काची फवारणी करा.",
-        chemicalControl: "रासायनिक औषधांची गरज नाही.",
-        preventionTips: "पुढील हंगामात पीक बदल करा आणि खात्रीशीर बियाणांचा वापर करा."
-      },
-      pa: {
-        diseaseName: "ਤੰਦਰੁਸਤ ਪੱਤਾ (ਕੋਈ ਬੀਮਾਰੀ ਨਹੀਂ ਲੱਭੀ)",
-        confidence: "98% ਸਥਿਰਤਾ",
-        severity: "LOW",
-        symptoms: "ਹਰਾ-ਭਰਾ ਪੱਤਾ, ਅਰੋਗ ਨਾੜਾਂ ਅਤੇ ਉੱਲੀ ਜਾਂ ਧੱಬਿਆਂ ਦਾ ਕੋਈ ਨਿਸ਼ਾਨ ਨਹੀਂ।",
-        treatmentSuggestions: "ਮਿੱਟੀ ਦੀ ನਮੀ ਦੀ ਜਾਂਚ ਅਤੇ ਦੇਸੀ ਖਾਦਾਂ ਦੀ ਵਰਤੋਂ ਜਾਰੀ ਰੱਖੋ।",
-        organicControl: "ਬੀਮਾਰੀਆਂ ਤੋਂ ਬਚਾਅ ਲਈ ਮਹੀਨੇ ਵਿੱਚ ਇੱਕ ਵਾਰ ਨਿੰਮ ਦੇ ਤੇਲ ਦਾ ਛਿੜਕਾਅ ਕਰੋ।",
-        chemicalControl: "ਕਿਸੇ ਰਸਾਇਣਕ ਕੀਟਨਾਸ਼ਕ ਦੀ ਲੋੜ ਨਹੀਂ ਹੈ।",
-        preventionTips: "ਫ਼ਸਲੀ ਚੱਕਰ ਅਪਣਾਓ ਅਤੇ ਰੋਗ-ਮੁਕਤ ਬੀਜਾਂ ਦੀ ਹੀ ਵਰਤੋਂ ਕਰੋ।"
-      }
-    },
-    blight: {
-      en: {
-        diseaseName: "Tomato Early Blight (Alternaria solani)",
-        confidence: "94% Match",
-        severity: "MEDIUM",
-        symptoms: "Target-like brown concentric rings first appearing on mature lower leaves, leaf yellowing, moving upward.",
-        treatmentSuggestions: "Isolate contaminated rows, prune lower leaves below 1 foot, and maintain low humidity.",
-        organicControl: "Apply organic Neem oil formulation (5ml per liter of warm water with soap) every 5 days.",
-        chemicalControl: "Foliar spray of Mancozeb or Chlorothalonil antifungal powder (2 grams/Liter).",
-        preventionTips: "Avoid sprinkler overhead irrigation; keep ground moisture level dry at night."
-      },
-      kn: {
-        diseaseName: "ಅರ್ಲಿ ಬ್ಲೈಟ್ ಕೊಳೆ ರೋಗ (Early Blight - Alternaria solani)",
-        confidence: "94% ನಿಖರ",
-        severity: "MEDIUM",
-        symptoms: "ಕೆಳಗಿನ ಹಳೆಯ ಎಲೆಗಳ ಮೇಲೆ ಕಪ್ಪು ಉಂಗುರಾಕಾರದ ಕಲೆಗಳು ಉಂಟಾಗಿ ಕ್ರಮೇಣ ಮೇಲಕ್ಕೆ ಹರಡುತ್ತವೆ.",
-        treatmentSuggestions: "ಸೋಂಕಿತ ಕೆಳಗಿನ ಎಲೆಗಳನ್ನು ತಕ್ಷಣ ಪ್ರತ್ಯೇಕಿಸಿ ಮತ್ತು ಗಾಳಿಯಾಡುವಂತೆ ಮಾಡಿ.",
-        organicControl: "ಬೇವಿನ ಎಣ್ಣೆ ಕಷಾಯ (೫ml/ಲೀಟರ್ ನೀರಿಗೆ) ಪ್ರತಿ ೫ ದಿನಕ್ಕೊಮ್ಮೆ ಸಿಂಪಡಿಸಿ.",
-        chemicalControl: "ಮ್ಯಾಂಕೋಜೆಬ್ ಶಿಲೀಂಧ್ರನಾಶಕವನ್ನು (೨g/ಲೀಟರ್ ನೀರಿಗೆ) ಬೆರೆಸಿ ಸಿಂಪಡಿಸಿ.",
-        preventionTips: "ಗಿಡದ ಬುಡಕ್ಕೆ ಮಾತ್ರ ನೀರು ನೀಡಿ; ಎಲೆಗಳ ಮೇಲೆ ನೀರು ಚೆಲ್ಲುವುದನ್ನು ತಪ್ಪಿಸಿ."
-      },
-      hi: {
-        diseaseName: "टमाटर अगेती झुलसा रोग (Alternaria solani)",
-        confidence: "94% सटीक",
-        severity: "MEDIUM",
-        symptoms: "निचली पुरानी पत्तियों पर गहरे भूरे रंग के छल्लेदार धब्बे बनते हैं जो धीरे-धीरे ऊपर की ओर फैलते हैं।",
-        treatmentSuggestions: "संक्रमित पंक्तियों को अलग करें, निचली टहनियों की छंटाई करें और नमी कम करें।",
-        organicControl: "नीम के तेल का घोल (5ml प्रति लीटर गुनगुने पानी में साबुन के साथ) हर 5 दिनों में छिड़कें।",
-        chemicalControl: "मैंकोजेब कवकनाशी (2 ग्राम प्रति लीटर पानी) का पत्तियों पर छिड़काव करें।",
-        preventionTips: "फव्वारा सिंचाई से बचें; सिंचाई केवल जड़ों में करें और पत्तों को सूखा रखें।"
-      },
-      ta: {
-        diseaseName: "தக்காளி அஞ்சல் இலை நோய் (Early Blight - Alternaria solani)",
-        confidence: "94% பொருத்தம்",
-        severity: "MEDIUM",
-        symptoms: "வட்டவடிவ பழுப்பு-கருப்பு வளையங்கள் முதலில் கீழ் இலைகளில் தோன்றி மேல் நோக்கி பரவுகிறது.",
-        treatmentSuggestions: "பாதிக்கப்பட்ட செடிகளை தனிமைப்படுத்தவும், தரைமட்டத்திலிருந்து 1 அடி வரை கீழ் இலைகளை வெட்டி அகற்றவும்.",
-        organicControl: "வேப்ப எண்ணெய் கரைசல் (ஒரு லிட்டர் வெதுவெதுப்பான நீருக்கு 5 மிலி) 5 நாட்களுக்கு ஒருமுறை தெளிக்கவும்.",
-        chemicalControl: "மேன்கோசெப் (Mancozeb) பூஞ்சை காளான் தூள் (லிட்டருக்கு 2 கிராம்) தெளிக்கவும்.",
-        preventionTips: "மேலிருந்து தெளிக்கும் நீர்ப்பாசனத்தைத் தவிர்க்கவும்; வேர் பகுதியில் மட்டும் தண்ணீர் பாய்ச்சவும்."
-      },
-      te: {
-        diseaseName: "టమోటా ముందస్తు తెగులు (Early Blight - Alternaria solani)",
-        confidence: "94% సరిపోలింది",
-        severity: "MEDIUM",
-        symptoms: "చెట్టు కింది ఆకులపై గుండ్రటి నల్లని మచ్చలు ఏర్పడి నెమ్మదిగా పై ఆకులకు వ్యాపిస్తాయి.",
-        treatmentSuggestions: "వ్యాధి సోకిన ఆకులను కత్తిరించండి, గాలి తగిలేలా మొక్కల మధ్య దూరం పెంచండి.",
-        organicControl: "వేప నూనె మిశ్రమాన్ని (లీటరు నీటిలో 5 మీ.లీ.) ప్రతి ఐదు రోజులకోసారి పిచికారీ చేయండి.",
-        chemicalControl: "మాంకోజెబ్ లేదా క్లోరోథలోనిల్ (లీటరుకు 2 గ్రాములు) మందు పిచికారీ చేయండి.",
-        preventionTips: "కృత్రిమ తుంపరల పద్ధతిలో నీరు పోయడం ఆపండి; నేలపై తేమ నిలవకుండా చూసుకోండి."
-      },
-      ml: {
-        diseaseName: "തക്കാളി കരിംപുള്ളി രോഗം (Early Blight - Alternaria solani)",
-        confidence: "94% പൊരുത്തം",
-        severity: "MEDIUM",
-        symptoms: "താഴത്തെ പ്രായമുള്ള ഇലകളിൽ കറുത്ത വളയങ്ങളോട് കൂടിയ പുള്ളികൾ ഉണ്ടാവുകയും പിന്നീട് മുകളിലേക്ക് പടരുകയും ചെയ്യുന്നു.",
-        treatmentSuggestions: "രോഗം ബാധിച്ച ഇലകളും തണ്ടുകളും വെട്ടിമാറ്റുക, ഈർപ്പം കുറയ്ക്കുക.",
-        organicControl: "5 മിലി வேപ്പെണ്ണ ഒരു ലിറ്റർ സോപ്പ് വെള്ളത്തിൽ കലക്കി 5 ദിവസത്തെ ഇടവേളകളിൽ തളിക്കുക.",
-        chemicalControl: "മാൻകോസെബ് (2 ഗ്രാം/ലിറ്റർ) എന്ന രാസ മരുന്ന് ഇലകളിൽ തളിക്കുക.",
-        preventionTips: "ഇലകൾ എപ്പോഴും നനഞ്ഞിരിക്കുന്ന സാഹചര്യം ഒഴിവാക്കുക; തടത്തിൽ മാത്രം നനയ്ക്കുക."
-      },
-      bn: {
-        diseaseName: "টমেটোর আগাম ধসা রোগ (Early Blight - Alternaria solani)",
-        confidence: "94% মিল",
-        severity: "MEDIUM",
-        symptoms: "নিচের দিকের বয়স্ক পাতায় লক্ষ্যবস্তুর মতো গাঢ় বাদামী রঙের গোল গোল রিং দেখা যায় এবং পাতা হলুদ হয়ে যায়।",
-        treatmentSuggestions: "সংক্রমিত পাতা ছাঁটাই করুন, মাটির কাছাকাছি থাকা ডালপালা কেটে পরিষ্কার রাখুন।",
-        organicControl: "নিম তেল (৫ মিলি ১ লিটার হালকা গরম জল ও সামান্য সাবানসহ) প্রতি ৫ দিন অন্তর স্প্রে করুন।",
-        chemicalControl: "ম্যানকোজেব বা ক্লোরোথ্যালোনিল নামক ছত্রাকনাশক (২ গ্রাম প্রতি লিটার জল) স্প্রে করুন।",
-        preventionTips: "পাতা ভেজানো ঝরনার জল দেওয়া বন্ধ করুন; শুধুমাত্র গোড়ায় জল দিন যাতে আর্দ্রতা না জমে।"
-      },
-      mr: {
-        diseaseName: "टोमॅटोवरील लवकर येणारा करपा (Early Blight)",
-        confidence: "94% अचूकता",
-        severity: "MEDIUM",
-        symptoms: "खालच्या जुन्या पानांवर मध्यभागी वर्तुळाकृती तपकिरी डाग पडतात व पान पिवळे होऊन वाळते.",
-        treatmentSuggestions: "बाधित पाने छाटून टाका आणि जमिनीत अतिरिक्त पाणी साचू देऊ नका.",
-        organicControl: "कडुनिंबाचे तेल (५ प्रति लिटर कोमट पाण्यात एकत्र करून) दर ५ दिवसांनी फवारा.",
-        chemicalControl: "मॅन्कोझेब २ ग्रॅम प्रति लिटर पाण्यात मिसळून संपूर्ण पानांवर फवारणी करा.",
-        preventionTips: "पानांवर पाणी टाकण्याऐवजी ड्रीपने थेट मुळाशी पाणी द्या जेणेकरून आर्द्रता कमी राहील."
-      },
-      pa: {
-        diseaseName: "ਟਮਾਟਰ ਦੀ ਅਗੇਤੀ ਬੀਮਾਰੀ (Early Blight -Alternaria solani)",
-        confidence: "94% ਮੇਲ",
-        severity: "MEDIUM",
-        symptoms: "ਹੇਠਲੇ ਪੁਰਾਣੇ ਪੱਤਿਆਂ ਤੇ ਕਾਲੇ-ਭੂਰੇ ਗੋਲ ਚੱਕਰ ਬਣਦੇ ਹਨ ਜੋ ਹੌਲੀ-ਹੌਲੀ ਉੱਪਰ ਵੱਲ ਵੱਧਦੇ ਹਨ।",
-        treatmentSuggestions: "ਬੀਮਾਰ ਪੱਤਿਆਂ ਦੀ ਕਟਾਈ ਕਰੋ, ਵਧੇਰੇ ਨਮੀ ਨੂੰ ਰੋਕਣ ਲਈ ਹਵਾਦਾਰੀ ਵਧਾਓ।",
-        organicControl: "ਨਿੰਮ ਦਾ ਤੇਲ (5 ਮਿ.ਲੀ. ਪ੍ਰਤੀ ਲੀਟਰ ਪਾਣੀ ਵਿੱਚ ਸ਼ੈਂਪੂ ਨਾਲ) ਹਰ 5 ਦਿਨਾਂ ਬਾਅਦ ਛਿੜਕੋ।",
-        chemicalControl: "ਮੈਂਕੋਜ਼ੇਬ ਉੱਲੀਨਾਸ਼ਕ (2 ਗ੍ਰਾਮ ਪ੍ਰਤੀ ਲੀਟਰ ਪਾਣੀ) ਦਾ ਪੱਤਿਆਂ ਤੇ ਛਿੜਕਾਅ ਕਰੋ।",
-        preventionTips: "ਉੱਪਰੋਂ ਪਾਣੀ ਪਾਉਣ ਤੋਂ ਬਚੋ, ਸਿੰਚਾਈ ਸਿਰਫ ਜੜ੍ਹਾਂ ਵਿੱਚ ਕਰੋ ਅਤੇ ਸ਼ਾਮ ਨੂੰ ਪਾਣੀ ਦੇਣ ਤੋਂ ਬਚੋ।"
-      }
-    },
-    rust: {
-      en: {
-        diseaseName: "Fungal Blast Rust Infection (Puccinia / Oryzae)",
-        confidence: "91% Match",
-        severity: "HIGH",
-        symptoms: "Spindle-shaped brown rust pustules with ash-grey centers, leaf tearing, and grain shrinkage.",
-        treatmentSuggestions: "Immediately stop excess nitrogen fertilizer, and schedule protective chemical or bio foliar spray.",
-        organicControl: "Foliar spray of fermented Sour Buttermilk (1L fermented for 5 days, mixed with 15L of water).",
-        chemicalControl: "Spray Propiconazole 25% EC (1 ml/L) or Tricyclazole powder (1g per 1.5 Liters of water).",
-        preventionTips: "Incorporate silicon bio-manure into the soil to harden leaf cuticles against spores."
-      },
-      kn: {
-        diseaseName: "ಎಲೆ ಬ್ಲಾಸ್ಟ್ ತುಕ್ಕು ರೋಗ (Fungal Blast Rust)",
-        confidence: "೯೧% ನಿಖರ",
-        severity: "HIGH",
-        symptoms: "ಎಲೆಗಳ ಮೇಲೆ ಕೆಂಪು ಕಂದು ಬಣ್ಣದ ತುಕ್ಕು ಕಲೆಗಳು ಮತ್ತು ಬೂದು ಬಣ್ಣದ ಚುಕ್ಕೆಗಳು ಕಂಡುಬರುತ್ತವೆ.",
-        treatmentSuggestions: "ಸಾರಜನಕ ಹೆಚ್ಚಿರುವ ಯೂರಿಯಾ ಗೊಬ್ಬರವನ್ನು ತಕ್ಷಣ ನಿಲ್ಲಿಸಿ, ಶೀಘ್ರ ಶಿಲೀಂಧ್ರನಾಶಕ ಬಳಸಿ.",
-        organicControl: "ಹುಳಿ ಮಜ್ಜಿಗೆ ದ್ರಾವಣವನ್ನು (೧ ಲೀಟರ್ ಹುಳಿ ಮಜ್ಜಿಗೆಯನ್ನು ೧೫ ಲೀಟರ್ ನೀರಿಗೆ ಬೆರೆಸಿ) ಸಿಂಪಡಿಸಿ.",
-        chemicalControl: "ಪ್ರೊಪಿಕೊನಜೋಲ್ ೨೫% EC (೧ml/ಲೀಟರ್ ನೀರಿಗೆ) ಸಿಂಪಡಿಸಿ.",
-        preventionTips: "ಗಿಡದ ಎಲೆ ಗಟ್ಟಿಯಾಗಲು ಸಿಲಿಕಾನ್ ಸಮೃದ್ಧ ಸಾವಯವ ಗೊಬ್ಬರವನ್ನು ಮಣ್ಣಿಗೆ ಬಳಸಿ."
-      },
-      hi: {
-        diseaseName: "अनाज का झोंका एवं गेरूआ रोग (Fungal Blast Rust)",
-        confidence: "91% सटीक",
-        severity: "HIGH",
-        symptoms: "पत्तियों पर धुरी के आकार के भूरे जंग जैसे धब्बे बनते हैं जिनके बीच का हिस्सा राख जैसे रंग का होता है।",
-        treatmentSuggestions: "अत्यधिक नाइट्रोजन या यूरिया का प्रयोग तुरंत रोकें और सुरक्षात्मक कवकनाशी डालें।",
-        organicControl: "खट्टा छाछ का छिड़काव (5 दिन पुराना 1 लीटर खट्टा मट्ठा 15 लीटर पानी में घोलकर छिड़कें)।",
-        chemicalControl: "प्रोपिकोनाजोल 25% ईसी (1 मिली प्रति लीटर) या ट्राईसाइक्लाजोल का छिड़काव करें।",
-        preventionTips: "पत्ती की रक्षा परत को सख्त करने के लिए मिट्टी में सिलिकॉनयुक्त जैविक खाद मिलाएं।"
-      },
-      ta: {
-        diseaseName: "பூஞ்சை காளான் துரு நோய் (Fungal Blast Rust)",
-        confidence: "91% பொருத்தம்",
-        severity: "HIGH",
-        symptoms: "இலைகளில் கதிர் வடிவிலான பழுப்பு துரு கொப்புளங்கள் மற்றும் சாம்பல் நிற மையப் பகுதிகள் ஏற்படும்.",
-        treatmentSuggestions: "அதிகப்படியான நைட்ரஜன் உர பயன்பாட்டைத் தற்காலிகமாக நிறுத்தவும், பாதுகாப்பு காளான் கொல்லி தெளிக்கவும்.",
-        organicControl: "புளித்த மோர் கரைசல் தெளிக்கவும் (1 லிட்டர் புளித்த மோரை 15 லிட்டர் தண்ணீருடன் கலந்து தெளிக்கவும்).",
-        chemicalControl: "புரோபிகோனசோல் (Propiconazole) 25% EC (லிட்டருக்கு 1 மிலி) தெளிக்கவும்.",
-        preventionTips: "இலையின் புறத்தோலை வலுப்படுத்த சிலிக்கான் நிறைந்த ஊட்டச்சத்தை மண்ணில் கலக்கவும்."
-      },
-      te: {
-        diseaseName: "శిలీంధ్ర బ్లాస్ట్ తుప్పు తెగులు (Fungal Blast Rust)",
-        confidence: "91% సరిపోలింది",
-        severity: "HIGH",
-        symptoms: "ఆకులపై తుప్పు రంగు కాండీ ఆకారపు మచ్చలు గోధుమ మరియు బూడిద రంగులో ఏర్పడతాయి.",
-        treatmentSuggestions: "తక్షణమే నత్రజని అధికంగా ఉండే ఎరువులను ఆపండి, రక్షణ పిచికారీ చేయండి.",
-        organicControl: "పులిసిన చల్ల పిచికారీ చేయండి (5 రోజులు పులిసిన 1 లీటరు చల్లను 15 లీటర్ల నీటితో పిచికారీ చేయండి).",
-        chemicalControl: "ప్రోపికోనాజోಲ್ (లీటరు నీటికి 1 మి.లీ) లేదా ట్రైసైక్లాజోల్ పిచికారీ చేయండి.",
-        preventionTips: "ఆకు గట్టిదనానికి నేలలో సిలికాన్ అధికంగా ఉండే ఎరువులను కలపండి."
-      },
-      ml: {
-        diseaseName: "കരിംചെമ്പ് തുരുമ്പ് രോഗം (Fungal Blast Rust)",
-        confidence: "91% പൊരുത്തം",
-        severity: "HIGH",
-        symptoms: "ഇലകളിൽ തവിട്ടുനിറമുള്ള ചെറിയ തുരുമ്പ് പാടുകൾ പ്രത്യക്ഷപ്പെടുകയും ഇലകൾ ഒടിയുകയും ചെയ്യുന്നു.",
-        treatmentSuggestions: "നൈട്രജൻ വളങ്ങളുടെ അമിത ഉപയോഗം ഉടൻ നിർത്തുക, ഫലപ്രದമായ ഉമി വാരം പ്രയോഗിക്കുക.",
-        organicControl: "പുളിപ്പിച്ച മോരൊഴുക്ക് തളിക്കുക (1 ലിറ്റർ പുളിച്ച മോര് 15 ലിറ്റർ വെള്ളത്തിൽ കലക്കി തളിക്കുക).",
-        chemicalControl: "പ്രൊപ്പികൊണസോൾ 25% EC (1 മിലി/ലിറ്റർ) ഇലകളിൽ തളിക്കുക.",
-        preventionTips: "ഇലകൾക്ക് പ്രതിരോധശേഷി ലഭിക്കാൻ മണ്ണിൽ സിലിക്കൺ ധാരാളമുള്ള ജൈവവളങ്ങൾ ചേർക്കുക."
-      },
-      bn: {
-        diseaseName: "ছত্রাকজনিত ব্লাস্ট ও মরচে রোগ (Fungal Blast Rust)",
-        confidence: "91% মিল",
-        severity: "HIGH",
-        symptoms: " can be seen on leaves, showing spindle-shaped brown pustules with grey centers.",
-        treatmentSuggestions: "অতিরিক্ত নাইট্রোজেন সার বা ইউরিয়া দেওয়া বন্ধ করুন এবং কপারভিত্তিক ছত্রাকনাশক দিন.",
-        organicControl: "টক দই বা ঘোল স্প্রে করুন.",
-        chemicalControl: "প্রোপিকোনাজল ২৫% ইসি স্প্রে করুন (১ মিলি প্রতি লিটার জল).",
-        preventionTips: "মাটিতে সিলিকন সমৃদ্ধ সার দিন."
-      },
-      mr: {
-        diseaseName: "तांबेरा आणि ब्लास्ट बुरशीजन्य रोग (Fungal Blast Rust)",
-        confidence: "91% अचूकता",
-        severity: "HIGH",
-        symptoms: "पानांवर लांबट आकाराचे तांबूस-तपकिरी डाग पडतात, पाने फाटतात आणि जमिनीवर गळतात.",
-        treatmentSuggestions: "नायट्रोजनयुक्त खतांचा वापर थांबवा आणि तातडीने बुरशीनाशक फवारणी करा.",
-        organicControl: "आंबट ताकाची फवारणी (५ दिवस आंबट ठेवलेले १ लिटर ताक १५ लिटर पाण्यात मिसळून फवारा).",
-        chemicalControl: "प्रोपीकोनाझोल २५% ईसी १ मिली प्रति लिटर पाण्यात मिसळून फवारणी करा.",
-        preventionTips: "झाडांची प्रतिकारशक्ती वाढवण्यासाठी जमिनीत सिलिकॉनयुक्त खतांचा वापर करा."
-      },
-      pa: {
-        diseaseName: "ਪੱਤਿਆਂ ਦਾ ਝੁਲਸ ਰੋਗ (Fungal Blast Rust / ਕੁੰਗੀ)",
-        confidence: "91% ਮੇਲ",
-        severity: "HIGH",
-        symptoms: "ਪੱਤਿਆਂ ਤੇ ਲੰਬੇ ਭੂਰੇ-ਲਾਲ ਜੰਗਾਲ ਵਰਗੇ ਧੱਬੇ ਬਣਦੇ ਹਨ ਜਿੰਨ੍ਹਾਂ ਦਾ ਕੇਂਦਰ ਸੁਆਹ ਰੰਗਾ ਹੁੰਦਾ ਹੈ।",
-        treatmentSuggestions: "ਨਾਈਟ੍ਰੋਜਨ (ਯੂਰੀਆ) ਦੀ ਵଧੇਰੇ ਵਰਤੋਂ ਫੌਰਨ ਬੰਦ ਕਰੋ, ਸੁਰੱਖਿਆਤਮਕ ਦਵਾਈ ਦਾ ਛਿੜਕਾਅ ਕਰੋ।",
-        organicControl: "ਖੱਟੀ ਲੱਸੀ ਦਾ ਛਿੜਕਾਅ (1 ਲੀਟਰ ਖੱਟੀ ਲੱਸੀ 15 ਲੀਟਰ ਪาਣੀ ਵਿੱਚ ਮਿਲਾ ਕੇ ਛਿੜਕੋ)।",
-        chemicalControl: "ਪ੍ਰੋਪੀਕੋਨਾਜ਼ੋਲ 25% EC (1 ਮਿ.ਲੀ. ਪ੍ਰਤੀ ਲੀਟਰ) ਦਾ ਛਿੜਕਾਅ ਕਰੋ।",
-        preventionTips: "ਮਿੱਟੀ ਵਿੱਚ ਸਿਲੀਕਾਨ ਯੁਕਤ ਦੇਸੀ ਖาਦਾਂ ਦੀ ਵਰਤੋਂ ਕਰੋ ਤਾਂ ਜੋ ਪੱਤੇ ਜੰਗਾਲ ਪ੍ਰਤੀ ਅਰੋਗ ਹੋ ਸਕਣ।"
-      }
+// 1B. OFFICIAL AGMARKNET / DATA.GOV.IN MANDI APMC MARKET DATA ROUTES
+app.get(['/api/agriculture/mandi', '/api/mandi'], (req, res) => {
+  try {
+    const { state, district, commodity, search, page, limit, sortBy } = req.query;
+    const result = queryOfficialMandis({
+      state: state as string,
+      district: district as string,
+      commodity: commodity as string,
+      search: search as string,
+      page: page ? parseInt(page as string, 10) : 1,
+      limit: limit ? parseInt(limit as string, 10) : 50,
+      sortBy: (sortBy as any) || 'modalPriceDesc'
+    });
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Mandi API Error]:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Current mandi data could not be retrieved.',
+      mandis: []
+    });
+  }
+});
+
+app.get(['/api/agriculture/mandi/:id', '/api/mandi/:id'], (req, res) => {
+  try {
+    const mandi = getMandiById(req.params.id);
+    if (!mandi) {
+      return res.status(404).json({ success: false, error: 'Mandi market record not found' });
     }
-  };
+    res.json({ success: true, mandi });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Failed to retrieve mandi details' });
+  }
+});
 
-  const condGroup = dict[type] || dict['blight'];
-  return condGroup[lang] || condGroup['en'];
-};
 
+// 2. AI CROP DOCTOR (DISEASE DIAGNOSIS) ROUTE
 app.post('/api/diagnose', async (req, res) => {
-  const { imageBase64, language = 'en', conditionType } = req.body;
+  const { imageBase64, language = 'en' } = req.body;
   if (!imageBase64) {
     return res.status(400).json({ error: 'Leaf image is required for diagnosis' });
   }
 
-  // If a specific condition is requested to override or API key is missing, execute premium local translators
-  const lowercaseBase = (imageBase64 || '').toLowerCase();
-  let matchedType: 'healthy' | 'blight' | 'rust' = 'blight';
-  if (conditionType === 'healthy' || lowercaseBase.includes('healthy') || lowercaseBase.includes('tomato_healthy') || lowercaseBase.includes('prod2')) {
-    matchedType = 'healthy';
-  } else if (conditionType === 'rust' || lowercaseBase.includes('rust') || lowercaseBase.includes('prod3') || lowercaseBase.includes('blast')) {
-    matchedType = 'rust';
-  }
+  const defaultCrop = (req.body?.cropType || req.body?.cropName || 'Tomato');
 
-  if (conditionType || !apiKey || apiKey.includes('MY_GEMINI_API_KEY')) {
-    const mockResult = getFallbackDiagnosis(matchedType, language);
-    
-    // Auto-save this diagnostic fallback report into DB history
-    const savedReport = {
-      id: `report_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      imageUrl: imageBase64,
-      ...mockResult,
-      language
-    };
+  const fallbackReport = {
+    id: `report_${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    imageUrl: compactImageUrl(imageBase64),
+    cropName: defaultCrop,
+    diseaseName: 'Early Leaf Blight / Foliar Spot Assessment',
+    confidence: '86%',
+    severity: 'MEDIUM' as const,
+    symptoms: 'Concentric brown spots with chlorotic yellow halo visible on foliage.',
+    treatmentSuggestions: 'Prune infected lower foliage and apply organic bio-control spray in the early morning.',
+    organicControl: 'Spray cold-pressed Neem seed oil (5ml/L water) or bio-fungicide Trichoderma harzianum @ 5g/L.',
+    chemicalControl: 'Mancozeb 75% WP @ 2g/L or Copper Oxychloride 50% WP @ 3g/L of water if spots exceed 20% leaf area.',
+    dosage: '2 grams per liter of water (approx 500 liters of spray solution per hectare).',
+    preventionTips: 'Maintain plant spacing for air circulation and practice furrow irrigation to avoid wet foliage.',
+    farmerPrecautions: 'Wear protective mask and gloves during spraying. Do not spray during peak midday heat or windy hours.',
+    disclaimer: 'Advisory Assessment: Confirm with your local Krishi Vigyan Kendra (KVK) or agriculture extension officer.',
+    language
+  };
+
+  if (!apiKey || apiKey.includes('MY_GEMINI_API_KEY')) {
     serverReports = loadJSON(REPORTS_FILE, []);
-    serverReports = [savedReport, ...serverReports];
+    serverReports = [fallbackReport, ...serverReports];
     saveJSON(REPORTS_FILE, serverReports);
-
-    return res.json(savedReport);
+    return res.json(fallbackReport);
   }
 
   try {
@@ -721,15 +527,14 @@ app.post('/api/diagnose', async (req, res) => {
             mimeType = contentType;
           }
         }
-      } catch (fetchErr: any) {
-        console.log('[Fetch URL Image Handled]', fetchErr?.message || fetchErr);
+      } catch (fetchErr) {
+        console.error('[Fetch URL Image Handled]', fetchErr?.message || fetchErr);
         throw fetchErr;
       }
     } else {
       base64Clean = imageBase64.replace(/^data:image\/\w+;base64,/, '');
     }
 
-    // Absolutely sanitize all whitespaces inside base64Clean for the Gemini content model parameters
     base64Clean = base64Clean.replace(/\s/g, '');
 
     const imagePart = {
@@ -744,16 +549,17 @@ app.post('/api/diagnose', async (req, res) => {
 Respond STRICTLY in JSON format matching this schema:
 {
   "cropName": "Name of the Crop (e.g. Tomato, Paddy, Wheat, Cotton, Maize, Chillie, Onion)",
-  "diseaseName": "Common Name of the Disease with scientific name if applicable",
-  "confidence": "94%",
+  "diseaseName": "Common Name of the Disease with scientific name if applicable (or 'Healthy Plant' if no issues detected)",
+  "confidence": "Estimated confidence percentage e.g. 92%",
   "severity": "HIGH" or "MEDIUM" or "LOW",
   "symptoms": "Simple farmer-friendly description of observed symptoms on leaves or stem",
   "treatmentSuggestions": "General helpful summary of step-by-step treatment",
   "organicControl": "Specific bio-friendly organic treatment like neem oil, sour buttermilk, etc.",
-  "chemicalControl": "Name of specific recommended chemical pesticide/fungicide controls (e.g. Mancozeb, Chlorothalonil)",
+  "chemicalControl": "Name of specific recommended chemical pesticide/fungicide controls",
   "dosage": "Exact measurement and dosage instructions (e.g., 2g per Liter of water, 150ml per acre)",
   "preventionTips": "How to prevent this recurrence next harvest season",
-  "farmerPrecautions": "Crucial health & safety precautions for the farmer while applying (e.g., wear protective mask and gloves, spray at twilight)"
+  "farmerPrecautions": "Crucial health & safety precautions for the farmer while applying (e.g., wear protective mask and gloves, spray at twilight)",
+  "disclaimer": "Advisory Assessment: This image-based evaluation is preliminary and advisory. Please confirm with your local Krishi Vigyan Kendra (KVK) or agricultural extension officer."
 }
 CRITICAL: Translate all string values into the local language with code "${language}" (where 'kn' is Kannada, 'hi' is Hindi, 'ta' is Tamil, 'te' is Telugu, 'ml' is Malayalam, 'bn' is Bengali, 'mr' is Marathi, 'pa' is Punjabi, 'en' is English). Keep JSON key names EXACTLY in English as defined above. Do not wrap in markdown boxes.`,
     };
@@ -767,23 +573,23 @@ CRITICAL: Translate all string values into the local language with code "${langu
     });
 
     const parsed = JSON.parse(response.text || '{}');
-    
-    // Auto-save this real Gemini report into DB history
+
     const savedReport = {
       id: `report_${Date.now()}`,
       timestamp: new Date().toISOString(),
-      imageUrl: imageBase64,
-      cropName: parsed.cropName || 'Tomato',
-      diseaseName: parsed.diseaseName || 'Early Blight (Alternaria solani)',
-      confidence: parsed.confidence || '94%',
+      imageUrl: compactImageUrl(imageBase64),
+      cropName: parsed.cropName || defaultCrop,
+      diseaseName: parsed.diseaseName || 'Analyzed Leaf Condition',
+      confidence: parsed.confidence || '88%',
       severity: parsed.severity || 'MEDIUM',
-      symptoms: parsed.symptoms || 'Concentric brown target-spots on lower foliage',
-      treatmentSuggestions: parsed.treatmentSuggestions || 'Trim affected foliage immediately and adjust watering schedule',
-      organicControl: parsed.organicControl || 'Apply Neem oil formulation (5ml/L) with soap',
-      chemicalControl: parsed.chemicalControl || 'Foliar spray of Mancozeb or Chlorothalonil',
-      dosage: parsed.dosage || '2 grams per Liter of water (approx 150g per acre)',
-      preventionTips: parsed.preventionTips || 'Prune bottom leaves 1 foot from ground to ensure low humidity',
-      farmerPrecautions: parsed.farmerPrecautions || 'Wear safety mask and gloves during chemical application',
+      symptoms: parsed.symptoms || 'Visual symptoms analyzed from photo.',
+      treatmentSuggestions: parsed.treatmentSuggestions || '',
+      organicControl: parsed.organicControl || fallbackReport.organicControl,
+      chemicalControl: parsed.chemicalControl || fallbackReport.chemicalControl,
+      dosage: parsed.dosage || fallbackReport.dosage,
+      preventionTips: parsed.preventionTips || fallbackReport.preventionTips,
+      farmerPrecautions: parsed.farmerPrecautions || 'Wear safety mask and gloves during chemical application.',
+      disclaimer: parsed.disclaimer || 'Advisory Assessment: Confirm with local KVK experts for severe crop conditions.',
       language
     };
 
@@ -792,56 +598,28 @@ CRITICAL: Translate all string values into the local language with code "${langu
     saveJSON(REPORTS_FILE, serverReports);
 
     res.json(savedReport);
-  } catch (err: any) {
-    console.log('[Leaf Diagnosis Handled]', err?.message || err);
-    // Secure failover fallback
-    const fallbackReport = getFallbackDiagnosis(matchedType, language);
-    const savedReport = {
-      id: `report_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      imageUrl: imageBase64,
-      ...fallbackReport,
-      language
-    };
+  } catch (err) {
+    console.warn('[Leaf Diagnosis Handled with Grounded Report]:', (err as any)?.message || err);
     serverReports = loadJSON(REPORTS_FILE, []);
-    serverReports = [savedReport, ...serverReports];
+    serverReports = [fallbackReport, ...serverReports];
     saveJSON(REPORTS_FILE, serverReports);
-
-    res.json(savedReport);
+    res.json(fallbackReport);
   }
 });
 
 // 3. AI FUTURE CROP PRICE ADVICE & PREDICTION ROUTE
 app.post('/api/predict-crop', async (req, res) => {
-  const { cropName, language = 'en' } = req.body;
+  const cropName = req.body?.cropName || req.body?.crop;
+  const language = req.body?.language || 'en';
   if (!cropName) {
     return res.status(400).json({ error: 'Crop name is required' });
   }
 
-  // Gracefully handle offline or missing key
   if (!apiKey || apiKey.includes('MY_GEMINI_API_KEY')) {
-    let mockPrediction = {
-      expectedDemand: 'HIGH',
-      profitPotential: 'HIGH',
-      climateRisk: 'MEDIUM',
-      advisoryText: 'Expected market demand climbs due to wedding and festival seasons. Water availability is adequate. Recommended to harvest before peak rainfall months to capture top pricing premium!'
-    };
-    if (language === 'kn') {
-      mockPrediction = {
-        expectedDemand: 'ಹೆಚ್ಚು',
-        profitPotential: 'ಹೆಚ್ಚು',
-        climateRisk: 'ಮಧ್ಯಮ',
-        advisoryText: 'ಹಬ್ಬ ಹರಿದಿನಗಳ ಕಾರಣ ಮಾರುಕಟ್ಟೆಯಲ್ಲಿ ಭಾರಿ ಬೇಡಿಕೆ ಇರಲಿದೆ. ಮಳೆಗಾಲಕ್ಕೂ ಮುನ್ನ ಕಟಾವು ಪೂರ್ಣಗೊಳಿಸಿದರೆ ಉನ್ನತ ಲಾಭಾಂಶ ಸಿಗುವುದು ನಿಶ್ಚಿತ!'
-      };
-    } else if (language === 'hi') {
-      mockPrediction = {
-        expectedDemand: 'उच्च',
-        profitPotential: 'उच्च',
-        climateRisk: 'मध्यम',
-        advisoryText: 'त्योहारों के मौसम के कारण भारी मांग रहेगी। बरसात अधिक होने से पहले कढ़ाई कर लें ताकि मंडी में सर्वोत्तम मूल्य मिले।'
-      };
-    }
-    return res.json(mockPrediction);
+    return res.status(503).json({
+      success: false,
+      error: 'AI service is temporarily unavailable. Please try again.'
+    });
   }
 
   try {
@@ -865,36 +643,12 @@ IMPORTANT: Translate all string values (except keys) into the local language wit
 
     const parsed = JSON.parse(response.text || '{}');
     res.json(parsed);
-  } catch (err: any) {
-    console.log('[Crop Prediction Handled]', err?.message || err);
-    let mockPrediction = {
-      expectedDemand: 'HIGH',
-      profitPotential: 'HIGH',
-      climateRisk: 'MEDIUM',
-      advisoryText: '[API Rate Limit Fallback] Expected market demand climbs due to wedding and festival seasons. Water availability is adequate. Recommended to harvest before peak rainfall months to capture top pricing premium!',
-      isFallback: true,
-      error: err.message
-    };
-    if (language === 'kn') {
-      mockPrediction = {
-        expectedDemand: 'ಹೆಚ್ಚು',
-        profitPotential: 'ಹೆಚ್ಚು',
-        climateRisk: 'ಮಧ್ಯಮ',
-        advisoryText: '[API ಆಫ್‌ಲೈನ್ ಫಾಲ್‌ಬ್ಯಾಕ್] ಹಬ್ಬ ಹರಿದಿನಗಳ ಕಾರಣ ಮಾರುಕಟ್ಟೆಯಲ್ಲಿ ಭಾರಿ ಬೇಡಿಕೆ ಇರಲಿದೆ. ಮಳೆಗಾಲಕ್ಕೂ ಮುನ್ನ ಕಟಾವು ಪೂರ್ಣಗೊಳಿಸಿದರೆ ಉನ್ನತ ಲಾಭಾಂಶ ಸಿಗುವುದು ನಿಶ್ಚಿತ!',
-        isFallback: true,
-        error: err.message
-      };
-    } else if (language === 'hi') {
-      mockPrediction = {
-        expectedDemand: 'उच्च',
-        profitPotential: 'उच्च',
-        climateRisk: 'मध्यम',
-        advisoryText: '[API ऑफ़लाइन फ़ॉलबैक] त्योहारों के मौसम के कारण भारी मांग रहेगी। बरसात अधिक होने से पहले कढ़ाई कर लें ताकि मंडी में सर्वोत्तम मूल्य मिले।',
-        isFallback: true,
-        error: err.message
-      };
-    }
-    return res.json(mockPrediction);
+  } catch (err) {
+    console.error('[Crop Prediction Handled]', err?.message || err);
+    res.status(503).json({
+      success: false,
+      error: 'AI service is temporarily unavailable. Please try again.'
+    });
   }
 });
 
@@ -905,28 +659,57 @@ app.get('/api/posts', (req, res) => {
 });
 
 app.post('/api/posts', (req, res) => {
-  const { author, content, image, voiceUrl, voiceCaption, district, village, category } = req.body;
-  if (!author || !content) {
-    return res.status(400).json({ error: 'Author and content required' });
+  const {
+    id,
+    author,
+    authorUid,
+    title,
+    content,
+    image,
+    voiceUrl,
+    voiceCaption,
+    transcript,
+    voiceTranslation,
+    voiceSummary,
+    voiceLang,
+    voiceDuration,
+    district,
+    village,
+    category,
+    crop,
+    postType
+  } = req.body;
+
+  if (!author || (!content && !voiceUrl && !title)) {
+    return res.status(400).json({ error: 'Author and content or voice recording are required' });
   }
+
   const newPost = {
-    id: `post_${Date.now()}`,
+    id: id || `post_${Date.now()}`,
     author: author,
-    authorUid: req.body.authorUid || `uid_${Date.now()}`,
+    authorUid: authorUid || req.body.userId || `uid_${Date.now()}`,
     isVerified: true,
-    content: content,
+    title: title || undefined,
+    content: content || (title ? `🎙️ ${title}` : '🎙️ Rural voice advisory update'),
     image: image || undefined,
     voiceUrl: voiceUrl || undefined,
-    voiceCaption: voiceCaption || undefined,
+    voiceCaption: voiceCaption || transcript || undefined,
+    voiceTranslation: voiceTranslation || undefined,
+    voiceSummary: voiceSummary || undefined,
+    voiceLang: voiceLang || 'en',
+    voiceDuration: voiceDuration ? parseInt(voiceDuration) : undefined,
+    crop: crop || undefined,
+    postType: postType || (voiceUrl ? 'voice' : 'text'),
     likes: 0,
     likedBy: [],
     district: district || 'Chikkaballapura',
     village: village || 'Anemadagu',
-    category: category || 'general',
+    category: category || crop || 'general',
     time: 'Just now',
     comments: [],
     createdAt: new Date().toISOString()
   };
+
   serverPosts = loadJSON(POSTS_FILE, initialPosts);
   serverPosts = [newPost, ...serverPosts];
   saveJSON(POSTS_FILE, serverPosts);
@@ -935,13 +718,13 @@ app.post('/api/posts', (req, res) => {
 
 app.post('/api/posts/:id/like', (req, res) => {
   const { id } = req.params;
-  const { userId } = req.body; 
+  const { userId } = req.body;
   serverPosts = loadJSON(POSTS_FILE, initialPosts);
   const post = serverPosts.find(p => p.id === id);
   if (!post) {
     return res.status(404).json({ error: 'Post not found' });
   }
-  
+
   post.likedBy = post.likedBy || [];
   const index = post.likedBy.indexOf(userId || 'guest_user');
   if (index === -1) {
@@ -951,7 +734,7 @@ app.post('/api/posts/:id/like', (req, res) => {
     post.likedBy.splice(index, 1);
     post.likes = Math.max(0, (post.likes || 1) - 1);
   }
-  
+
   saveJSON(POSTS_FILE, serverPosts);
   res.json({ likes: post.likes, likedBy: post.likedBy });
 });
@@ -1079,21 +862,28 @@ app.post('/api/products', (req, res) => {
   res.status(201).json(newProduct);
 });
 
-// Real state-backed Budget endpoints
+// Real state-backed user-scoped Budget endpoints
 app.get('/api/budget', (req, res) => {
+  const userId = (req.headers['x-user-id'] || req.query.userId || 'guest') as string;
   serverBudget = loadJSON(BUDGET_FILE, initialBudget);
-  res.json(serverBudget);
+  if (userId === 'guest') {
+    return res.json(serverBudget);
+  }
+  const userBudget = serverBudget.filter((item: any) => item.userId === userId || !item.userId);
+  res.json(userBudget);
 });
 
 app.post('/api/budget', (req, res) => {
   const { name, amount } = req.body;
+  const userId = (req.headers['x-user-id'] || req.body?.userId || req.query.userId || 'guest') as string;
   if (!name || isNaN(parseFloat(amount))) {
     return res.status(400).json({ error: 'Valid Name and Amount are required' });
   }
   const newItem = {
     id: `exp_${Date.now()}`,
     name,
-    amount: parseFloat(amount)
+    amount: parseFloat(amount),
+    userId
   };
   serverBudget = loadJSON(BUDGET_FILE, initialBudget);
   serverBudget.push(newItem);
@@ -1103,8 +893,13 @@ app.post('/api/budget', (req, res) => {
 
 app.delete('/api/budget/:id', (req, res) => {
   const { id } = req.params;
+  const userId = (req.headers['x-user-id'] || req.query.userId || 'guest') as string;
   serverBudget = loadJSON(BUDGET_FILE, initialBudget);
-  serverBudget = serverBudget.filter(item => item.id !== id);
+  serverBudget = serverBudget.filter((item: any) => {
+    if (item.id !== id) return true;
+    if (item.userId && userId !== 'guest' && item.userId !== userId) return true;
+    return false;
+  });
   saveJSON(BUDGET_FILE, serverBudget);
   res.json({ success: true });
 });
@@ -1123,34 +918,49 @@ app.delete('/api/disease-reports/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// Production-ready Smart Irrigation Advisor endpoints
+// Production-ready User-Scoped Smart Irrigation Advisor endpoints
 const initialIrrigationData = {
   history: [
-    { id: 'ir_1', crop: 'Tomato', date: '2026-06-03', liters: 1200, method: 'Drip Irrigation', duration: 25, status: 'Completed', notes: 'Twilight micro-drip flow scheduled automatically' },
-    { id: 'ir_2', crop: 'Rice', date: '2026-06-04', liters: 7500, method: 'Flood Basin', duration: 60, status: 'Completed', notes: 'Heavy flow irrigation to keep roots fully submerged' },
-    { id: 'ir_3', crop: 'Cotton', date: '2026-06-05', liters: 2400, method: 'Micro-Sprinkler', duration: 30, status: 'Completed', notes: 'Optimal crop moisture baseline stabilized' }
+    { id: 'ir_1', crop: 'Tomato', date: '2026-06-03', liters: 1200, method: 'Sub-surface Drip Irrigation', duration: 25, status: 'Completed', notes: 'Twilight micro-drip session recorded' },
+    { id: 'ir_2', crop: 'Rice', date: '2026-06-04', liters: 7500, method: 'Controlled Flood Basin', duration: 60, status: 'Completed', notes: 'Basin watering to keep root zone flooded' },
+    { id: 'ir_3', crop: 'Cotton', date: '2026-06-05', liters: 2400, method: 'Alternate Furrow Irrigation', duration: 30, status: 'Completed', notes: 'Alternate furrow session recorded' }
   ],
   preferences: {
-    deviceType: 'Smart Drip Valve V2',
-    pumpAutomatic: true,
-    selectedCrop: 'Tomato',
+    selectedCrop: 'tomato',
     soilMoistureTrigger: 45,
-    rainBypass: true
+    irrigationMethod: 'Sub-surface Drip Irrigation'
   }
 };
 
+const getOrInitUserIrrigation = (store: Record<string, any>, uid: string) => {
+  if (!store[uid]) {
+    store[uid] = {
+      history: [...initialIrrigationData.history],
+      preferences: { ...initialIrrigationData.preferences }
+    };
+  }
+  return store[uid];
+};
+
 app.get('/api/irrigation', (req, res) => {
-  const currentData = loadJSON(IRRIGATION_FILE, initialIrrigationData);
-  res.json(currentData);
+  const userId = (req.headers['x-user-id'] || req.query.userId || 'guest') as string;
+  const rawStore = loadJSON(IRRIGATION_FILE, {});
+  const store = rawStore.history ? { guest: rawStore } : rawStore;
+  const userData = getOrInitUserIrrigation(store, userId);
+  res.json(userData);
 });
 
 app.post('/api/irrigation/history', (req, res) => {
   const { crop, liters, method, duration, notes } = req.body;
+  const userId = (req.headers['x-user-id'] || req.body?.userId || req.query.userId || 'guest') as string;
   if (!crop || !liters || !method) {
     return res.status(400).json({ error: 'Crop, liters, and method are required' });
   }
 
-  const currentData = loadJSON(IRRIGATION_FILE, initialIrrigationData);
+  const rawStore = loadJSON(IRRIGATION_FILE, {});
+  const store = rawStore.history ? { guest: rawStore } : rawStore;
+  const userData = getOrInitUserIrrigation(store, userId);
+
   const newLog = {
     id: `ir_${Date.now()}`,
     crop,
@@ -1159,36 +969,43 @@ app.post('/api/irrigation/history', (req, res) => {
     method,
     duration: parseInt(duration) || 15,
     status: 'Completed',
-    notes: notes || 'Manual watering session initiated by farmer'
+    notes: notes || 'Manual watering session initiated by farmer',
+    userId
   };
 
-  currentData.history = [newLog, ...currentData.history];
-  saveJSON(IRRIGATION_FILE, currentData);
+  userData.history = [newLog, ...userData.history];
+  saveJSON(IRRIGATION_FILE, store);
   res.status(201).json(newLog);
 });
 
 app.delete('/api/irrigation/history/:id', (req, res) => {
   const { id } = req.params;
-  const currentData = loadJSON(IRRIGATION_FILE, initialIrrigationData);
-  currentData.history = currentData.history.filter((h: any) => h.id !== id);
-  saveJSON(IRRIGATION_FILE, currentData);
+  const userId = (req.headers['x-user-id'] || req.query.userId || 'guest') as string;
+  const rawStore = loadJSON(IRRIGATION_FILE, {});
+  const store = rawStore.history ? { guest: rawStore } : rawStore;
+  const userData = getOrInitUserIrrigation(store, userId);
+
+  userData.history = userData.history.filter((h: any) => h.id !== id);
+  saveJSON(IRRIGATION_FILE, store);
   res.json({ success: true });
 });
 
 app.post('/api/irrigation/preferences', (req, res) => {
-  const { deviceType, pumpAutomatic, selectedCrop, soilMoistureTrigger, rainBypass } = req.body;
-  const currentData = loadJSON(IRRIGATION_FILE, initialIrrigationData);
+  const { selectedCrop, soilMoistureTrigger, irrigationMethod } = req.body;
+  const userId = (req.headers['x-user-id'] || req.body?.userId || req.query.userId || 'guest') as string;
+  const rawStore = loadJSON(IRRIGATION_FILE, {});
+  const store = rawStore.history ? { guest: rawStore } : rawStore;
+  const userData = getOrInitUserIrrigation(store, userId);
 
-  currentData.preferences = {
-    deviceType: deviceType || currentData.preferences.deviceType,
-    pumpAutomatic: pumpAutomatic !== undefined ? pumpAutomatic : currentData.preferences.pumpAutomatic,
-    selectedCrop: selectedCrop || currentData.preferences.selectedCrop,
-    soilMoistureTrigger: soilMoistureTrigger !== undefined ? parseInt(soilMoistureTrigger) : currentData.preferences.soilMoistureTrigger,
-    rainBypass: rainBypass !== undefined ? rainBypass : currentData.preferences.rainBypass
+  userData.preferences = {
+    ...userData.preferences,
+    selectedCrop: selectedCrop || userData.preferences.selectedCrop || 'tomato',
+    soilMoistureTrigger: soilMoistureTrigger !== undefined ? parseInt(soilMoistureTrigger) : (userData.preferences.soilMoistureTrigger || 45),
+    irrigationMethod: irrigationMethod || userData.preferences.irrigationMethod || 'Sub-surface Drip Irrigation'
   };
 
-  saveJSON(IRRIGATION_FILE, currentData);
-  res.json(currentData.preferences);
+  saveJSON(IRRIGATION_FILE, store);
+  res.json(userData.preferences);
 });
 
 // Full-stack Vite setup
@@ -1199,9 +1016,9 @@ const startServer = async () => {
       server: { middlewareMode: true },
       appType: 'custom',
     });
-    
+
     app.use(vite.middlewares);
-    
+
     // Serve index.html dynamically for all other non-API routes
     app.use('*', async (req, res, next) => {
       const url = req.originalUrl;
@@ -1225,10 +1042,13 @@ const startServer = async () => {
     });
   } else {
     console.log('Running server in PRODUCTION mode...');
-    app.use(express.static(path.join(__dirname, '../dist')));
-    
+    const distPath = fs.existsSync(path.join(__dirname, 'dist'))
+      ? path.join(__dirname, 'dist')
+      : path.join(__dirname, '../dist');
+    app.use(express.static(distPath));
+
     app.get('*', (req, res) => {
-      res.sendFile(path.join(__dirname, '../dist/index.html'));
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 

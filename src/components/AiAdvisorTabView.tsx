@@ -1,17 +1,18 @@
-import React, { useState } from 'react';
-import { 
-  MessageSquare, 
-  Sprout, 
-  Bug, 
-  Sparkles, 
-  TrendingUp, 
-  DollarSign, 
-  Mic, 
-  MicOff, 
-  Award, 
-  ArrowLeft, 
-  Send, 
-  Volume2, 
+import React, { useState, useRef, useEffect } from 'react';
+import {
+  MessageSquare,
+  Sprout,
+  Bug,
+  Sparkles,
+  TrendingUp,
+  DollarSign,
+  Mic,
+  MicOff,
+  Award,
+  ArrowLeft,
+  Send,
+  Volume2,
+  VolumeX,
   X,
   Camera,
   Calendar,
@@ -28,12 +29,17 @@ import {
   Trash2,
   ShieldCheck,
   User,
-  Zap
+  Zap,
+  RotateCcw,
+  Radio,
+  Square
 } from 'lucide-react';
+import { cleanTextForSpeech } from '../utils/cleanTextForSpeech';
 import { AICropPredictionSystem } from './AICropPredictionSystem';
 import { SmartIrrigationAdvisor } from './SmartIrrigationAdvisor';
 import { WeatherIntelligence } from './WeatherIntelligence';
 import { KYCGovernmentBenefits } from './KYCGovernmentBenefits';
+import { GovernmentSchemesModal } from './GovernmentSchemesModal';
 
 export interface AiAdvisorTabViewProps {
   currentLang: string;
@@ -42,15 +48,23 @@ export interface AiAdvisorTabViewProps {
   setActiveAiTool: (tool: 'chat' | 'cropPrediction' | 'pest' | 'soil' | 'yield' | 'finance' | 'voice' | 'sustainability' | 'irrigation' | 'weather' | 'schemes' | 'calendar' | null) => void;
   fullUserProfile?: any;
   // Chat state
-  chatHistory: Array<{ text: string; sender: 'user' | 'ai'; time: string }>;
+  chatHistory: Array<{ text: string; sender: 'user' | 'ai'; time: string; image?: string; isError?: boolean; sources?: any[]; category?: string; sourceLabel?: string }>;
+  clearChatHistory?: () => void;
+  chatAttachedImage?: string | null;
+  setChatAttachedImage?: (img: string | null) => void;
   chatInput: string;
   setChatInput: (val: string) => void;
   isChatLoading: boolean;
-  triggerSendChatMessage: (msg: string) => void;
+  triggerSendChatMessage: (msg: string, image?: string | null) => void;
   // Voice state
   isRecording: boolean;
-  startVoiceRecordingTrigger: () => void;
-  speakVoiceOutput: (text: string) => void;
+  startVoiceRecordingTrigger: (
+    onSpeechCaptured?: (finalText: string) => void,
+    onInterimSpeech?: (interim: string) => void,
+    onListeningStateChange?: (listening: boolean) => void,
+    onError?: (errorMessage: string) => void
+  ) => void | Promise<void>;
+  speakVoiceOutput: (text: string, onEnd?: () => void, lang?: string) => void;
   chatEndRef: React.RefObject<HTMLDivElement>;
   // Crop Doctor State
   hiddenFileInputRef: React.RefObject<HTMLInputElement>;
@@ -64,6 +78,9 @@ export interface AiAdvisorTabViewProps {
   deleteScanHistoryItem: (id: string) => void;
   handleDiseaseExamplePick?: (type: string) => void;
   downloadCropHealthPdf?: (report: any) => void;
+  onOpenImagePicker?: () => void;
+  analyzeCropDiseaseImage?: (base64String: string) => Promise<void>;
+  uploadProgressStatus?: string;
   // Budget ledger state
   expenses: any[];
   newExpenseTitle: string;
@@ -84,6 +101,9 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
   setActiveAiTool,
   fullUserProfile,
   chatHistory,
+  clearChatHistory,
+  chatAttachedImage,
+  setChatAttachedImage,
   chatInput,
   setChatInput,
   isChatLoading,
@@ -103,6 +123,9 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
   deleteScanHistoryItem,
   handleDiseaseExamplePick,
   downloadCropHealthPdf,
+  onOpenImagePicker,
+  analyzeCropDiseaseImage,
+  uploadProgressStatus,
   expenses,
   newExpenseTitle,
   setNewExpenseTitle,
@@ -113,6 +136,19 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
   compileEcoScore,
   triggerToast,
 }) => {
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleAnalyzePhoto = () => {
+    if (!selectedLeafImage) {
+      triggerToast('Please select or capture a crop leaf image first.');
+      return;
+    }
+    if (isDiagnosing) return;
+    if (analyzeCropDiseaseImage) {
+      analyzeCropDiseaseImage(selectedLeafImage);
+    }
+  };
+
   // Soil Health Tool State
   const [soilType, setSoilType] = useState('Red Sandy Loam');
   const [nitrogen, setNitrogen] = useState(120);
@@ -121,6 +157,7 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
   const [soilCrop, setSoilCrop] = useState('Tomato');
 
   // Yield Prediction Tool State
+  const [showKycInAdvisor, setShowKycInAdvisor] = useState(false);
   const [yieldCrop, setYieldCrop] = useState('Tomato');
   const [landAcres, setLandAcres] = useState('2');
 
@@ -136,12 +173,176 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
     'What government subsidies are available for drip irrigation?'
   ];
 
+  // TTS Playback tracking state for Krishi AI Assistant chat
+  const [speakingMsgIndex, setSpeakingMsgIndex] = useState<number | null>(null);
+
+  const handleSpeakerClick = (text: string, idx: number) => {
+    if (speakingMsgIndex === idx && typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+      setSpeakingMsgIndex(null);
+      return;
+    }
+    setSpeakingMsgIndex(idx);
+    speakVoiceOutput(text, () => {
+      setSpeakingMsgIndex(prev => (prev === idx ? null : prev));
+    });
+  };
+
+  // Dedicated Assistant Sub-Mode: 'voice' | 'chat'
+  const [assistantMode, setAssistantMode] = useState<'voice' | 'chat'>(activeAiTool === 'voice' ? 'voice' : 'chat');
+  const [voiceAssistantState, setVoiceAssistantState] = useState<'IDLE' | 'LISTENING' | 'PROCESSING' | 'SPEAKING' | 'ERROR'>('IDLE');
+  const [voiceSpokenQuery, setVoiceSpokenQuery] = useState<string>('');
+  const [voiceInterimText, setVoiceInterimText] = useState<string>('');
+  const [voiceLatestAnswer, setVoiceLatestAnswer] = useState<string>('');
+  const [voiceLatestSources, setVoiceLatestSources] = useState<any[]>([]);
+  const [voiceErrorMsg, setVoiceErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeAiTool === 'voice') setAssistantMode('voice');
+    else if (activeAiTool === 'chat') setAssistantMode('chat');
+  }, [activeAiTool]);
+
+  useEffect(() => {
+    if (isRecording) {
+      setVoiceAssistantState('LISTENING');
+      setVoiceErrorMsg(null);
+    } else {
+      setVoiceAssistantState(prev => (prev === 'LISTENING' ? 'IDLE' : prev));
+    }
+  }, [isRecording]);
+
+  const VOICE_SUGGESTIONS = [
+    { label: '🍅 Tomato Mandi Price', query: 'What is the current tomato price near Chikkaballapura?' },
+    { label: '💧 Tomato Irrigation Advice', query: 'When should I irrigate my tomato crop?' },
+    { label: '🍂 Yellow Leaves Diagnosis', query: 'My tomato leaves are turning yellow. What could be the reason?' },
+    { label: '🌦️ Today & Tomorrow Weather', query: "What is today's weather and will it rain tomorrow?" },
+    { label: '🏛️ Government Welfare Schemes', query: 'What government schemes are available for farmers?' }
+  ];
+
+  const startLiveVoiceSession = () => {
+    // 1. Cancel any active speech playback before listening
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      (window as any).__krishiActiveUtterance = null;
+    }
+
+    setVoiceErrorMsg(null);
+    setVoiceInterimText('');
+    setVoiceAssistantState('LISTENING');
+
+    startVoiceRecordingTrigger(
+      // onSpeechCaptured
+      (finalText: string) => {
+        const query = (finalText || '').trim();
+        if (!query) {
+          setVoiceAssistantState('IDLE');
+          return;
+        }
+        setVoiceSpokenQuery(query);
+        setVoiceInterimText('');
+        executeVoiceAssistantQuery(query);
+      },
+      // onInterimSpeech
+      (interim: string) => {
+        setVoiceInterimText(interim);
+      },
+      // onListeningStateChange
+      (listening: boolean) => {
+        if (listening) {
+          setVoiceAssistantState('LISTENING');
+        } else {
+          setVoiceAssistantState(prev => (prev === 'LISTENING' ? 'IDLE' : prev));
+        }
+      },
+      // onError
+      (errMsg: string) => {
+        setVoiceAssistantState('ERROR');
+        setVoiceErrorMsg(errMsg);
+      }
+    );
+  };
+
+  const executeVoiceAssistantQuery = async (queryText: string) => {
+    const trimmed = (queryText || '').trim();
+    if (!trimmed) {
+      setVoiceAssistantState('IDLE');
+      return;
+    }
+
+    console.log('[Krishi AI] AI request started:', trimmed);
+    setVoiceAssistantState('PROCESSING');
+    setVoiceSpokenQuery(trimmed);
+    setChatInput(trimmed);
+    setVoiceErrorMsg(null);
+
+    // Cancel any active speech before requesting AI response
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      (window as any).__krishiActiveUtterance = null;
+    }
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: trimmed,
+          language: currentLang,
+          uid: fullUserProfile?.id || 'farmer_user',
+          farmerProfile: fullUserProfile || {
+            name: farmerName,
+            village: fullUserProfile?.village || 'Anemadagu',
+            district: fullUserProfile?.district || 'Chikkaballapura',
+            state: 'Karnataka',
+            farmSizeAcres: 3.5,
+            soilType: 'Red Sandy Loam',
+            primaryCrops: ['Tomato', 'Ragi']
+          },
+          history: chatHistory.slice(-6).map(c => ({
+            role: c.sender === 'user' ? 'user' : 'model',
+            content: c.text
+          }))
+        })
+      });
+
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data) {
+        throw new Error(data?.error || `Request failed with status ${response.status}`);
+      }
+
+      const reply = data.response || data.reply || data.text || 'I checked the latest available data. Please verify your query or check back shortly.';
+      console.log('[Krishi AI] AI response received:', reply);
+
+      // Display the AI response text
+      setVoiceLatestAnswer(reply);
+      setVoiceLatestSources(data.sources || []);
+
+      // In Voice Mode, automatically convert the COMPLETE AI response into speech
+      setVoiceAssistantState('SPEAKING');
+      speakVoiceOutput(reply, () => {
+        setVoiceAssistantState('IDLE');
+      }, currentLang);
+    } catch (err: any) {
+      console.log('[Krishi AI] AI request error:', err?.message || err);
+      setVoiceAssistantState('ERROR');
+      setVoiceErrorMsg("I couldn't retrieve the latest live data right now. Please check your internet connection or tap retry.");
+    }
+  };
+
+  const stopLiveVoiceSpeaking = () => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      (window as any).__krishiActiveUtterance = null;
+    }
+    setVoiceAssistantState('IDLE');
+  };
+
   // Helper to get primary crop context
-  const primaryCropsStr = fullUserProfile?.primaryCrops?.length > 0 
-    ? fullUserProfile.primaryCrops.join(' & ') 
+  const primaryCropsStr = fullUserProfile?.primaryCrops?.length > 0
+    ? fullUserProfile.primaryCrops.join(' & ')
     : 'Tomato & Ragi';
   const farmerName = fullUserProfile?.name || 'Farmer Partner';
-  const farmerLocation = fullUserProfile?.village 
+  const farmerLocation = fullUserProfile?.village
     ? `${fullUserProfile.village}, ${fullUserProfile.district}`
     : 'Chikkaballapura';
 
@@ -174,7 +375,7 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
 
   return (
     <div id="v_ai_advisor_tab" className="p-3 pb-24 space-y-4 animate-fadeIn max-w-xl mx-auto w-full select-none">
-      
+
       {/* 🚀 1. HEADER (Fixed or Sticky at top) */}
       <div className="bg-gradient-to-r from-emerald-800 via-emerald-700 to-teal-800 text-white p-4 rounded-3xl shadow-lg border border-emerald-600/30 flex items-center justify-between">
         <div>
@@ -193,16 +394,17 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
         <div className="flex items-center space-x-1.5">
           <button
             onClick={() => {
-              if (activeAiTool === 'chat') {
+              if (activeAiTool === 'chat' || activeAiTool === 'voice') {
                 setActiveAiTool(null);
               } else {
-                setActiveAiTool('chat');
+                setActiveAiTool('voice');
+                setAssistantMode('voice');
                 triggerToast('Opening Krishi AI Voice Assistant...');
               }
             }}
             className={`p-2.5 rounded-2xl font-black text-xs flex items-center space-x-1.5 shadow-md cursor-pointer transition-all active:scale-95 ${
-              activeAiTool === 'chat' 
-                ? 'bg-yellow-400 text-yellow-950 font-black' 
+              (activeAiTool === 'chat' || activeAiTool === 'voice')
+                ? 'bg-yellow-400 text-yellow-950 font-black'
                 : 'bg-white/15 hover:bg-white/25 text-white border border-white/20'
             }`}
             title="Toggle AI Chat & Voice Guidance"
@@ -224,7 +426,7 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
             <span>← Back to AI Advisor</span>
           </button>
           <span className="font-extrabold text-xs tracking-wide text-yellow-300 uppercase truncate max-w-[180px]">
-            {activeAiTool === 'chat' && '💬 AI Assistant Chat'}
+            {(activeAiTool === 'chat' || activeAiTool === 'voice') && (assistantMode === 'voice' ? '🎙️ Krishi Voice Assistant' : '💬 Krishi AI Chat')}
             {activeAiTool === 'pest' && '🔬 Crop Doctor Scanner'}
             {activeAiTool === 'cropPrediction' && '🌱 Crop Recommendation'}
             {activeAiTool === 'soil' && '🌾 Soil Health & NPK'}
@@ -471,21 +673,33 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
             </div>
           </div>
 
-          {/* 🌟 5. AI ASSISTANT (Chat & Voice Section) */}
+          {/* 🌟 AI ASSISTANT (Chat, Voice & Vision Section) */}
           <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col space-y-3 p-4">
             <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
               <div className="flex items-center space-x-2">
-                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
+                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm">
                   <MessageSquare className="w-4 h-4" />
                 </div>
                 <div>
                   <h3 className="text-xs font-black text-slate-800 uppercase tracking-wide">Krishi AI Assistant</h3>
-                  <p className="text-[10px] text-slate-500 font-semibold">24/7 Multilingual Smart Farming Q&A</p>
+                  <p className="text-[10px] text-slate-500 font-semibold">Conversational Agricultural Advisor • Text, Voice & Vision</p>
                 </div>
               </div>
-              <span className="text-[9px] bg-emerald-50 text-emerald-700 font-black px-2 py-0.5 rounded-full border border-emerald-200">
-                Gemini AI Active
-              </span>
+              <div className="flex items-center space-x-2">
+                <span className="text-[9px] bg-emerald-50 text-emerald-700 font-black px-2 py-0.5 rounded-full border border-emerald-200">
+                  Gemini AI Active
+                </span>
+                {clearChatHistory && (
+                  <button
+                    onClick={clearChatHistory}
+                    className="p-1.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10px] font-bold flex items-center space-x-1 cursor-pointer transition-all active:scale-95"
+                    title="Start fresh conversation"
+                  >
+                    <RotateCcw className="w-3 h-3 text-slate-600" />
+                    <span className="hidden sm:inline">New Chat</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Suggested Prompt Chips */}
@@ -495,7 +709,7 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
                 {SUGGESTED_QUESTIONS.map((q, idx) => (
                   <button
                     key={idx}
-                    onClick={() => { setChatInput(q); triggerSendChatMessage(q); }}
+                    onClick={() => { setChatInput(q); triggerSendChatMessage(q, chatAttachedImage); }}
                     className="text-[10px] bg-slate-50 hover:bg-emerald-50 text-slate-700 hover:text-emerald-900 border border-slate-200 hover:border-emerald-300 font-semibold px-2.5 py-1.5 rounded-xl transition-all text-left cursor-pointer"
                   >
                     💡 {q}
@@ -505,31 +719,51 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
             </div>
 
             {/* Chat Messages Log */}
-            <div className="bg-slate-50 rounded-2xl border border-slate-100 p-3 max-h-64 overflow-y-auto space-y-2.5">
+            <div className="bg-slate-50 rounded-2xl border border-slate-100 p-3 max-h-80 overflow-y-auto space-y-2.5">
               {chatHistory.length === 0 ? (
-                <div className="py-6 text-center text-slate-400 space-y-1">
-                  <MessageSquare className="w-6 h-6 mx-auto text-slate-300" />
-                  <p className="text-xs font-bold">Ask anything about crops, soil, pests, or subsidies!</p>
-                  <p className="text-[10px]">Type below or tap the microphone to ask in your local language.</p>
+                <div className="py-8 text-center text-slate-400 space-y-2">
+                  <MessageSquare className="w-8 h-8 mx-auto text-slate-300" />
+                  <p className="text-xs font-bold text-slate-700">Ask any agricultural question naturally!</p>
+                  <p className="text-[10px] text-slate-500 max-w-sm mx-auto">
+                    Type your question, tap the microphone to speak, or tap the camera icon to attach a crop leaf photo for AI diagnosis.
+                  </p>
                 </div>
               ) : (
                 chatHistory.map((ch, idx) => (
                   <div key={idx} className={`flex ${ch.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-xs ${
-                      ch.sender === 'user' 
-                        ? 'bg-emerald-600 text-white rounded-br-none font-semibold' 
+                    <div className={`max-w-[88%] rounded-2xl px-3.5 py-2.5 text-xs ${
+                      ch.sender === 'user'
+                        ? 'bg-emerald-600 text-white rounded-br-none font-semibold shadow-xs'
+                        : ch.isError
+                        ? 'bg-rose-50 border border-rose-200 text-rose-900 rounded-bl-none shadow-2xs font-semibold'
                         : 'bg-white border border-slate-200 text-slate-800 rounded-bl-none shadow-2xs font-semibold'
                     }`}>
-                      <p className="leading-relaxed">{ch.text}</p>
-                      <div className="mt-1 flex items-center justify-between">
+                      {/* Attached Image Thumbnail in Chat */}
+                      {ch.image && (
+                        <div className="mb-2 max-w-[220px] rounded-xl overflow-hidden border border-emerald-400/40 bg-black/10">
+                          <img src={ch.image} alt="Crop Leaf Scan" className="w-full h-auto object-cover max-h-40 rounded-xl" />
+                        </div>
+                      )}
+                      <p className="leading-relaxed whitespace-pre-wrap">{ch.text}</p>
+                      <div className="mt-1.5 flex items-center justify-between border-t border-black/5 pt-1">
                         <span className="text-[8px] opacity-60 font-mono">{ch.time}</span>
                         {ch.sender === 'ai' && (
                           <button
-                            onClick={() => speakVoiceOutput(ch.text)}
-                            className="ml-2 text-emerald-700 hover:text-emerald-950 p-0.5 rounded-full cursor-pointer"
-                            title="Listen voice advice"
+                            id={`krishi_speaker_btn_${idx}`}
+                            onClick={() => handleSpeakerClick(ch.text, idx)}
+                            className={`ml-2 p-1 rounded-full cursor-pointer transition-all ${
+                              speakingMsgIndex === idx
+                                ? 'text-rose-600 bg-rose-50 ring-1 ring-rose-300 animate-pulse'
+                                : 'text-emerald-700 hover:text-emerald-950 hover:bg-slate-100'
+                            }`}
+                            title={speakingMsgIndex === idx ? "Stop speaking" : "Listen voice advice"}
+                            aria-label={speakingMsgIndex === idx ? "Stop speaking" : "Listen voice advice"}
                           >
-                            <Volume2 className="w-3.5 h-3.5" />
+                            {speakingMsgIndex === idx ? (
+                              <VolumeX className="w-3.5 h-3.5" />
+                            ) : (
+                              <Volume2 className="w-3.5 h-3.5" />
+                            )}
                           </button>
                         )}
                       </div>
@@ -540,7 +774,8 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
 
               {isChatLoading && (
                 <div className="flex justify-start">
-                  <div className="bg-white border border-slate-200 rounded-2xl rounded-bl-none px-3.5 py-2 flex space-x-1.5 items-center">
+                  <div className="bg-white border border-slate-200 rounded-2xl rounded-bl-none px-4 py-2.5 flex space-x-2 items-center shadow-xs">
+                    <span className="text-[11px] text-emerald-800 font-bold">AgriVerse AI is thinking...</span>
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-bounce"></div>
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-bounce delay-100"></div>
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-bounce delay-200"></div>
@@ -550,45 +785,655 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
               <div ref={chatEndRef} />
             </div>
 
-            {/* Input Controls */}
-            <div className="flex items-center space-x-2 pt-1">
+            {/* Image Attachment Preview Badge */}
+            {chatAttachedImage && (
+              <div className="flex items-center space-x-2 bg-emerald-50 border border-emerald-200 p-1.5 px-3 rounded-2xl animate-fadeIn">
+                <img src={chatAttachedImage} alt="Attachment Preview" className="w-8 h-8 rounded-lg object-cover border border-emerald-300" />
+                <span className="text-[11px] font-bold text-emerald-900 truncate max-w-[200px]">Leaf photo attached</span>
+                <button
+                  type="button"
+                  onClick={() => setChatAttachedImage && setChatAttachedImage(null)}
+                  className="text-rose-600 hover:bg-rose-100 p-1 rounded-full cursor-pointer ml-auto"
+                  title="Remove image"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* Input Controls Bar */}
+            <div className="flex items-center space-x-1.5 pt-1">
+              <input
+                type="file"
+                ref={chatFileInputRef}
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                      const base64 = reader.result as string;
+                      setChatAttachedImage && setChatAttachedImage(base64);
+                      triggerToast('Leaf photo attached! Type your question or tap send.');
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                  e.target.value = '';
+                }}
+              />
+
+              {/* Camera / Image Attachment Button */}
               <button
+                type="button"
+                onClick={() => chatFileInputRef.current?.click()}
+                className={`p-2.5 rounded-2xl font-black text-xs flex items-center justify-center cursor-pointer transition-all shrink-0 ${
+                  chatAttachedImage ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                }`}
+                title="Attach crop leaf photo for AI diagnosis"
+              >
+                <Camera className="w-4 h-4" />
+              </button>
+
+              {/* Microphone Voice Recognition Button */}
+              <button
+                type="button"
                 onClick={startVoiceRecordingTrigger}
                 className={`p-2.5 rounded-2xl font-black text-xs flex items-center justify-center cursor-pointer transition-all shrink-0 ${
-                  isRecording 
-                    ? 'bg-rose-600 text-white animate-pulse shadow-md ring-2 ring-rose-300' 
+                  isRecording
+                    ? 'bg-rose-600 text-white animate-pulse shadow-md ring-2 ring-rose-300'
                     : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                 }`}
-                title="Hold or tap to speak question"
+                title={isRecording ? "🎤 Listening... Tap to finish" : "Hold or tap to speak your farming question"}
               >
                 {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 text-emerald-700" />}
               </button>
 
+              {/* Text Input */}
               <input
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') triggerSendChatMessage(chatInput); }}
-                placeholder="Ask Krishi AI (e.g. Best fertilizer for Rice?)..."
-                className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl py-2 px-3 text-xs font-semibold outline-none focus:bg-white focus:border-emerald-500"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    triggerSendChatMessage(chatInput, chatAttachedImage);
+                  }
+                }}
+                placeholder={isRecording ? "🎤 Listening... Speak your farming question now" : (chatAttachedImage ? "Ask AI about this leaf photo..." : "Ask Krishi AI anything (crops, soil, pests, schemes)...")}
+                className={`flex-1 bg-slate-50 border rounded-2xl py-2 px-3 text-xs font-semibold outline-none transition-all ${
+                  isRecording
+                    ? 'border-rose-400 bg-rose-50/40 ring-2 ring-rose-200 text-rose-900 placeholder:text-rose-600 animate-pulse'
+                    : 'border-slate-200 focus:bg-white focus:border-emerald-500'
+                }`}
               />
 
+              {/* Send Button */}
               <button
-                onClick={() => triggerSendChatMessage(chatInput)}
-                className="p-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl cursor-pointer shrink-0 transition-all active:scale-95 shadow-sm"
+                type="button"
+                onClick={() => triggerSendChatMessage(chatInput, chatAttachedImage)}
+                disabled={isChatLoading || (!chatInput.trim() && !chatAttachedImage)}
+                className="p-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-2xl cursor-pointer shrink-0 transition-all active:scale-95 shadow-sm"
+                title="Send to Krishi AI"
               >
                 <Send className="w-4 h-4" />
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+
+      {/* ========================================================================= */}
+      {/* 🚀 SUB-TOOL 0: DEDICATED FULL CHATBOT VIEW */}
+      {/* ========================================================================= */}
+      {/* ========================================================================= */}
+      {/* 🚀 SUB-TOOL 0: UNIFIED KRISHI AI ASSISTANT (VOICE + TEXT CHAT) */}
+      {/* ========================================================================= */}
+      {(activeAiTool === 'chat' || activeAiTool === 'voice') && (
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col space-y-3 p-4">
+          
+          {/* Header & Mode Switcher */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2.5 border-b border-slate-100 pb-3">
+            <div className="flex items-center space-x-2">
+              <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm">
+                <Sparkles className="w-4 h-4 text-yellow-300" />
+              </div>
+              <div>
+                <h3 className="text-xs font-black text-slate-800 uppercase tracking-wide">Krishi AI Assistant</h3>
+                <p className="text-[10px] text-slate-500 font-semibold">Voice & Text Agriculture Intelligence • Zero Billing</p>
+              </div>
+            </div>
+
+            {/* Mode Switcher Tabs */}
+            <div className="flex items-center space-x-1.5 w-full sm:w-auto justify-between sm:justify-end">
+              <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200/80">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAssistantMode('voice');
+                    if (voiceAssistantState === 'SPEAKING') stopLiveVoiceSpeaking();
+                  }}
+                  className={`py-1.5 px-3 rounded-xl font-black text-[11px] flex items-center space-x-1.5 transition-all cursor-pointer ${
+                    assistantMode === 'voice'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Mic className="w-3.5 h-3.5" />
+                  <span>Voice Mode</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAssistantMode('chat');
+                    if (voiceAssistantState === 'SPEAKING') stopLiveVoiceSpeaking();
+                  }}
+                  className={`py-1.5 px-3 rounded-xl font-black text-[11px] flex items-center space-x-1.5 transition-all cursor-pointer ${
+                    assistantMode === 'chat'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>Text Chat</span>
+                </button>
+              </div>
+
+              {clearChatHistory && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearChatHistory();
+                    setVoiceSpokenQuery('');
+                    setVoiceLatestAnswer('');
+                    setVoiceLatestSources([]);
+                    setVoiceAssistantState('IDLE');
+                    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+                  }}
+                  className="p-1.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10px] font-bold flex items-center space-x-1 cursor-pointer transition-all active:scale-95"
+                  title="Start fresh conversation"
+                >
+                  <RotateCcw className="w-3 h-3 text-slate-600" />
+                  <span className="hidden sm:inline">New Chat</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* ========================================================================= */}
+          {/* 🎙️ MODE A: VOICE AGRICULTURE ASSISTANT */}
+          {/* ========================================================================= */}
+          {assistantMode === 'voice' && (
+            <div className="bg-gradient-to-b from-slate-900 via-emerald-950 to-teal-950 text-white rounded-3xl p-5 shadow-inner border border-emerald-700/40 flex flex-col items-center text-center space-y-4">
+              
+              {/* Voice State Badge */}
+              <div className="flex items-center space-x-2">
+                {voiceAssistantState === 'IDLE' && (
+                  <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 px-3 py-1 rounded-full text-xs font-bold flex items-center space-x-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>Tap microphone to ask</span>
+                  </span>
+                )}
+                {voiceAssistantState === 'LISTENING' && (
+                  <span className="bg-rose-500/25 text-rose-300 border border-rose-400/40 px-3 py-1 rounded-full text-xs font-black flex items-center space-x-1.5 animate-pulse">
+                    <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                    <span>🎤 Listening... Speak your farming question</span>
+                  </span>
+                )}
+                {voiceAssistantState === 'PROCESSING' && (
+                  <span className="bg-amber-500/25 text-amber-300 border border-amber-400/40 px-3 py-1 rounded-full text-xs font-bold flex items-center space-x-1.5">
+                    <RefreshCw className="w-3 h-3 animate-spin text-amber-300" />
+                    <span>⏳ Thinking...</span>
+                  </span>
+                )}
+                {voiceAssistantState === 'SPEAKING' && (
+                  <span className="bg-cyan-500/25 text-cyan-300 border border-cyan-400/40 px-3 py-1 rounded-full text-xs font-black flex items-center space-x-1.5">
+                    <Volume2 className="w-3.5 h-3.5 animate-bounce text-cyan-300" />
+                    <span>🔊 SPEAKING...</span>
+                  </span>
+                )}
+                {voiceAssistantState === 'ERROR' && (
+                  <span className="bg-rose-500/20 text-rose-200 border border-rose-400/30 px-3 py-1 rounded-full text-xs font-bold flex items-center space-x-1.5">
+                    <AlertTriangle className="w-3 h-3 text-rose-400" />
+                    <span>Microphone Notice</span>
+                  </span>
+                )}
+              </div>
+
+              {/* Main Interactive Voice Orb */}
+              <div className="relative flex items-center justify-center my-2">
+                {/* Visualizer Pulse Rings for Listening / Speaking */}
+                {voiceAssistantState === 'LISTENING' && (
+                  <>
+                    <div className="absolute w-36 h-36 rounded-full bg-rose-500/20 animate-ping pointer-events-none"></div>
+                    <div className="absolute w-44 h-44 rounded-full bg-rose-500/10 animate-pulse pointer-events-none"></div>
+                  </>
+                )}
+                {voiceAssistantState === 'SPEAKING' && (
+                  <>
+                    <div className="absolute w-36 h-36 rounded-full bg-cyan-500/20 animate-ping pointer-events-none"></div>
+                    <div className="absolute w-44 h-44 rounded-full bg-cyan-500/10 animate-pulse pointer-events-none"></div>
+                  </>
+                )}
+
+                {/* Main Action Button */}
+                <button
+                  id="agri_voice_assistant_orb"
+                  type="button"
+                  onClick={() => {
+                    if (voiceAssistantState === 'SPEAKING') {
+                      stopLiveVoiceSpeaking();
+                    } else {
+                      startLiveVoiceSession();
+                    }
+                  }}
+                  className={`w-28 h-28 rounded-full flex flex-col items-center justify-center shadow-2xl transition-all cursor-pointer active:scale-95 z-10 ${
+                    voiceAssistantState === 'LISTENING'
+                      ? 'bg-gradient-to-tr from-rose-600 to-red-500 text-white ring-4 ring-rose-400/40 animate-pulse'
+                      : voiceAssistantState === 'PROCESSING'
+                      ? 'bg-gradient-to-tr from-amber-600 to-yellow-500 text-white ring-4 ring-amber-400/40 animate-spin'
+                      : voiceAssistantState === 'SPEAKING'
+                      ? 'bg-gradient-to-tr from-cyan-600 to-teal-500 text-white ring-4 ring-cyan-400/40'
+                      : voiceAssistantState === 'ERROR'
+                      ? 'bg-gradient-to-tr from-rose-700 to-red-800 text-white ring-4 ring-rose-500/40'
+                      : 'bg-gradient-to-tr from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white ring-4 ring-emerald-400/30'
+                  }`}
+                  title={
+                    voiceAssistantState === 'SPEAKING'
+                      ? 'Tap to stop speaking'
+                      : voiceAssistantState === 'LISTENING'
+                      ? 'Listening... Tap to finish'
+                      : voiceAssistantState === 'PROCESSING'
+                      ? 'Thinking...'
+                      : 'Tap to speak your question'
+                  }
+                  aria-label="AgriVerse Voice Assistant Microphone"
+                >
+                  {voiceAssistantState === 'SPEAKING' ? (
+                    <>
+                      <Volume2 className="w-10 h-10 mb-1 animate-pulse" />
+                      <span className="text-[10px] font-black uppercase tracking-wider">Speaking</span>
+                    </>
+                  ) : voiceAssistantState === 'LISTENING' ? (
+                    <>
+                      <Mic className="w-10 h-10 mb-1 animate-bounce" />
+                      <span className="text-[10px] font-black uppercase tracking-wider">Listening</span>
+                    </>
+                  ) : voiceAssistantState === 'PROCESSING' ? (
+                    <>
+                      <RefreshCw className="w-8 h-8 mb-1 animate-spin" />
+                      <span className="text-[9px] font-bold uppercase">Thinking</span>
+                    </>
+                  ) : voiceAssistantState === 'ERROR' ? (
+                    <>
+                      <RefreshCw className="w-8 h-8 mb-1" />
+                      <span className="text-[10px] font-bold uppercase">Retry</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="w-10 h-10 mb-1" />
+                      <span className="text-[10px] font-black uppercase tracking-wider">Tap to Speak</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Stop Speaking / Retry Quick Buttons */}
+              {voiceAssistantState === 'SPEAKING' && (
+                <button
+                  type="button"
+                  onClick={stopLiveVoiceSpeaking}
+                  className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-400/30 py-1.5 px-4 rounded-full text-xs font-bold flex items-center space-x-1.5 cursor-pointer active:scale-95 transition-all"
+                >
+                  <Square className="w-3 h-3 fill-rose-300 text-rose-300" />
+                  <span>Stop Speaking</span>
+                </button>
+              )}
+
+              {voiceAssistantState === 'ERROR' && (
+                <div className="space-y-2 max-w-sm">
+                  <p className="text-xs text-rose-200 font-medium">
+                    {voiceErrorMsg || 'Microphone input interrupted. Please verify device permissions and try again.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={startLiveVoiceSession}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white py-1.5 px-4 rounded-full text-xs font-bold flex items-center space-x-1.5 cursor-pointer active:scale-95 mx-auto transition-all shadow-md"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Try Speaking Again</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Live Interim Transcript Display */}
+              {voiceAssistantState === 'LISTENING' && voiceInterimText && (
+                <div className="bg-black/30 border border-white/10 p-3 rounded-2xl max-w-md w-full animate-fadeIn">
+                  <span className="text-[10px] text-emerald-300 font-bold uppercase tracking-wider block mb-1">
+                    Speech Detected:
+                  </span>
+                  <p className="text-xs font-medium text-white italic">
+                    "{voiceInterimText}"
+                  </p>
+                </div>
+              )}
+
+              {/* Spoken Question & Verified Answer Transcript Box */}
+              {(voiceSpokenQuery || voiceLatestAnswer || chatInput) && voiceAssistantState !== 'LISTENING' && (
+                <div className="bg-slate-900/90 border border-emerald-500/30 rounded-2xl p-3.5 max-w-md w-full text-left space-y-2 text-xs shadow-md">
+                  {(voiceSpokenQuery || chatInput) && (
+                    <div className="border-b border-white/10 pb-2">
+                      <span className="text-[10px] text-emerald-400 font-extrabold uppercase tracking-wide block">
+                        🎤 Recognized Speech:
+                      </span>
+                      <p className="text-xs font-semibold text-slate-100 mt-0.5">
+                        "{voiceSpokenQuery || chatInput}"
+                      </p>
+                    </div>
+                  )}
+
+                  {chatInput && !voiceLatestAnswer && (
+                    <div className="pt-1 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setAssistantMode('chat')}
+                        className="flex-1 bg-white/10 hover:bg-white/20 text-slate-200 font-bold py-1.5 px-3 rounded-xl text-[11px] flex items-center justify-center space-x-1 cursor-pointer transition-all"
+                      >
+                        <MessageSquare className="w-3 h-3" />
+                        <span>Review in Chat</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerSendChatMessage(chatInput, chatAttachedImage);
+                          setAssistantMode('chat');
+                        }}
+                        className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-3 rounded-xl text-[11px] flex items-center justify-center space-x-1 cursor-pointer shadow-sm transition-all"
+                      >
+                        <Send className="w-3 h-3" />
+                        <span>Send to Krishi AI</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {voiceLatestAnswer && (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] text-cyan-300 font-extrabold uppercase tracking-wide flex items-center space-x-1">
+                          <Volume2 className="w-3 h-3" />
+                          <span>AI Spoken Response:</span>
+                        </span>
+                        {voiceAssistantState === 'IDLE' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setVoiceAssistantState('SPEAKING');
+                              speakVoiceOutput(voiceLatestAnswer, () => setVoiceAssistantState('IDLE'), currentLang);
+                            }}
+                            className="text-[10px] text-emerald-300 hover:text-emerald-100 flex items-center space-x-1 cursor-pointer"
+                            title="Replay spoken answer"
+                          >
+                            <Volume2 className="w-3 h-3" />
+                            <span>Replay Audio</span>
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-200 leading-relaxed max-h-40 overflow-y-auto whitespace-pre-wrap font-medium">
+                        {voiceLatestAnswer}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Verified Sources Tag */}
+                  {voiceLatestSources && voiceLatestSources.length > 0 && (
+                    <div className="pt-1 border-t border-white/10 flex flex-wrap gap-1">
+                      {voiceLatestSources.map((s: any, sIdx: number) => (
+                        <span
+                          key={sIdx}
+                          className="bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 text-[9px] px-2 py-0.5 rounded-md font-mono"
+                        >
+                          Source: {s.source || s.title} {s.date ? `• ${s.date}` : ''}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Voice Question Suggestions */}
+              <div className="w-full text-left space-y-1.5 pt-1 border-t border-emerald-800/40">
+                <span className="text-[10px] font-extrabold text-emerald-300 uppercase tracking-wider block">
+                  Tap to Ask with Voice:
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {VOICE_SUGGESTIONS.map((item, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => {
+                        setVoiceSpokenQuery(item.query);
+                        executeVoiceAssistantQuery(item.query);
+                      }}
+                      disabled={voiceAssistantState === 'PROCESSING'}
+                      className="text-[11px] bg-white/10 hover:bg-emerald-600/30 active:scale-95 text-slate-100 border border-white/15 hover:border-emerald-400/40 font-semibold px-3 py-1.5 rounded-xl transition-all text-left cursor-pointer"
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* 💬 MODE B: TEXT CHAT ASSISTANT */}
+          {/* ========================================================================= */}
+          {assistantMode === 'chat' && (
+            <div className="space-y-3">
+              {/* Suggested Questions Chips */}
+              <div className="space-y-1.5">
+                <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Suggested Questions:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {SUGGESTED_QUESTIONS.map((q, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => { setChatInput(q); triggerSendChatMessage(q, chatAttachedImage); }}
+                      className="text-[10px] bg-slate-50 hover:bg-emerald-50 text-slate-700 hover:text-emerald-900 border border-slate-200 hover:border-emerald-300 font-semibold px-2.5 py-1.5 rounded-xl transition-all text-left cursor-pointer"
+                    >
+                      💡 {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Chat Messages Stream */}
+              <div className="bg-slate-50 rounded-2xl border border-slate-100 p-3 max-h-80 overflow-y-auto space-y-2.5">
+                {chatHistory.length === 0 ? (
+                  <div className="py-8 text-center text-slate-400 space-y-2">
+                    <MessageSquare className="w-8 h-8 mx-auto text-slate-300" />
+                    <p className="text-xs font-bold text-slate-700">Ask any agricultural question naturally!</p>
+                    <p className="text-[10px] text-slate-500 max-w-sm mx-auto">
+                      Type your question, tap the microphone to speak, or tap the camera icon to attach a crop leaf photo for AI diagnosis.
+                    </p>
+                  </div>
+                ) : (
+                  chatHistory.map((ch, idx) => (
+                    <div key={idx} className={`flex ${ch.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[88%] rounded-2xl px-3.5 py-2.5 text-xs ${
+                        ch.sender === 'user'
+                          ? 'bg-emerald-600 text-white rounded-br-none font-semibold shadow-xs'
+                          : ch.isError
+                          ? 'bg-rose-50 border border-rose-200 text-rose-900 rounded-bl-none shadow-2xs font-semibold'
+                          : 'bg-white border border-slate-200 text-slate-800 rounded-bl-none shadow-2xs font-semibold'
+                      }`}>
+                        {/* Attached Image Thumbnail in Chat */}
+                        {ch.image && (
+                          <div className="mb-2 max-w-[220px] rounded-xl overflow-hidden border border-emerald-400/40 bg-black/10">
+                            <img src={ch.image} alt="Crop Leaf Scan" className="w-full h-auto object-cover max-h-40 rounded-xl" />
+                          </div>
+                        )}
+                        <p className="leading-relaxed whitespace-pre-wrap">{ch.text}</p>
+                        
+                        {/* Compact Source Attribution Badge for Verified Live Data */}
+                        {ch.sender === 'ai' && ch.sources && ch.sources.length > 0 && (
+                          <div className="mt-1.5 pt-1 border-t border-slate-100 flex flex-wrap gap-1">
+                            {ch.sources.map((s: any, sIdx: number) => (
+                              <span
+                                key={sIdx}
+                                className="text-[8px] bg-emerald-50 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded font-mono font-medium"
+                              >
+                                Source: {s.source || s.title} {s.date ? `• ${s.date}` : ''}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="mt-1.5 flex items-center justify-between border-t border-black/5 pt-1">
+                          <span className="text-[8px] opacity-60 font-mono">{ch.time}</span>
+                          {ch.sender === 'ai' && (
+                            <button
+                              id={`krishi_speaker_btn_${idx}`}
+                              type="button"
+                              onClick={() => handleSpeakerClick(ch.text, idx)}
+                              className={`ml-2 p-1 rounded-full cursor-pointer transition-all ${
+                                speakingMsgIndex === idx
+                                  ? 'text-rose-600 bg-rose-50 ring-1 ring-rose-300 animate-pulse'
+                                  : 'text-emerald-700 hover:text-emerald-950 hover:bg-slate-100'
+                              }`}
+                              title={speakingMsgIndex === idx ? "Stop speaking" : "Listen voice advice"}
+                              aria-label={speakingMsgIndex === idx ? "Stop speaking" : "Listen voice advice"}
+                            >
+                              {speakingMsgIndex === idx ? (
+                                <VolumeX className="w-3.5 h-3.5" />
+                              ) : (
+                                <Volume2 className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+
+                {isChatLoading && (
+                  <div className="flex justify-start">
+                    <div className="bg-white border border-slate-200 rounded-2xl rounded-bl-none px-4 py-2.5 flex space-x-2 items-center shadow-xs">
+                      <span className="text-[11px] text-emerald-800 font-bold">AgriVerse AI is thinking...</span>
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-bounce"></div>
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-bounce delay-100"></div>
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-bounce delay-200"></div>
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* Image Attachment Preview Badge */}
+              {chatAttachedImage && (
+                <div className="flex items-center space-x-2 bg-emerald-50 border border-emerald-200 p-1.5 px-3 rounded-2xl animate-fadeIn">
+                  <img src={chatAttachedImage} alt="Attachment Preview" className="w-8 h-8 rounded-lg object-cover border border-emerald-300" />
+                  <span className="text-[11px] font-bold text-emerald-900 truncate max-w-[200px]">Leaf photo attached</span>
+                  <button
+                    type="button"
+                    onClick={() => setChatAttachedImage && setChatAttachedImage(null)}
+                    className="text-rose-600 hover:bg-rose-100 p-1 rounded-full cursor-pointer ml-auto"
+                    title="Remove image"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {/* Input Controls Bar */}
+              <div className="flex items-center space-x-1.5 pt-1">
+                <input
+                  type="file"
+                  ref={chatFileInputRef}
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        const base64 = reader.result as string;
+                        setChatAttachedImage && setChatAttachedImage(base64);
+                        triggerToast('Leaf photo attached! Type your question or tap send.');
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+
+                {/* Camera / Image Attachment Button */}
+                <button
+                  type="button"
+                  onClick={() => chatFileInputRef.current?.click()}
+                  className={`p-2.5 rounded-2xl font-black text-xs flex items-center justify-center cursor-pointer transition-all shrink-0 ${
+                    chatAttachedImage ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                  }`}
+                  title="Attach crop leaf photo for AI diagnosis"
+                >
+                  <Camera className="w-4 h-4" />
+                </button>
+
+                {/* Microphone Voice Recognition Button */}
+                <button
+                  type="button"
+                  onClick={startVoiceRecordingTrigger}
+                  className={`p-2.5 rounded-2xl font-black text-xs flex items-center justify-center cursor-pointer transition-all shrink-0 ${
+                    isRecording
+                      ? 'bg-rose-600 text-white animate-pulse shadow-md ring-2 ring-rose-300'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                  }`}
+                  title={isRecording ? "🎤 Listening... Tap to finish" : "Hold or tap to speak your farming question"}
+                >
+                  {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 text-emerald-700" />}
+                </button>
+
+                {/* Text Input */}
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      triggerSendChatMessage(chatInput, chatAttachedImage);
+                    }
+                  }}
+                  placeholder={isRecording ? "🎤 Listening... Speak your farming question now" : (chatAttachedImage ? "Ask AI about this leaf photo..." : "Ask Krishi AI anything (crops, soil, pests, schemes)...")}
+                  className={`flex-1 bg-slate-50 border rounded-2xl py-2 px-3 text-xs font-semibold outline-none transition-all ${
+                    isRecording
+                      ? 'border-rose-400 bg-rose-50/40 ring-2 ring-rose-200 text-rose-900 placeholder:text-rose-600 animate-pulse'
+                      : 'border-slate-200 focus:bg-white focus:border-emerald-500'
+                  }`}
+                />
+
+                {/* Send Button */}
+                <button
+                  type="button"
+                  onClick={() => triggerSendChatMessage(chatInput, chatAttachedImage)}
+                  disabled={isChatLoading || (!chatInput.trim() && !chatAttachedImage)}
+                  className="p-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-2xl cursor-pointer shrink-0 transition-all active:scale-95 shadow-sm"
+                  title="Send to Krishi AI"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
 
         </div>
       )}
 
+
       {/* ========================================================================= */}
       {/* 🚀 SUB-TOOL 1: CROP DOCTOR & PEST AI */}
       {/* ========================================================================= */}
-      {activeAiTool === 'pest' && (
+      {(activeAiTool === 'pest' || (activeAiTool as string) === 'doctor') && (
         <div className="bg-white rounded-3xl border border-slate-100 p-4 shadow-sm space-y-4">
           <div className="flex justify-between items-center border-b border-slate-100 pb-2">
             <h4 className="font-extrabold text-slate-800 text-xs uppercase tracking-wide flex items-center space-x-1.5">
@@ -598,71 +1443,96 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
             <span className="text-[9px] font-black bg-rose-100 text-rose-800 px-2 py-0.5 rounded">Real Gemini AI Scanner</span>
           </div>
 
-          {/* Preset Sample Leaf Pickers */}
-          <div className="space-y-1">
-            <span className="text-[10px] font-bold text-slate-400 uppercase block">Try Sample Leaf Diagnosis:</span>
-            <div className="flex space-x-2 overflow-x-auto pb-1">
-              <button
-                onClick={() => handleDiseaseExamplePick && handleDiseaseExamplePick('healthy')}
-                className="bg-slate-50 hover:bg-emerald-50 border px-3 py-1.5 rounded-xl text-[10px] font-bold text-slate-700 shrink-0 flex items-center space-x-1 cursor-pointer"
-              >
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                <span>Healthy Leaf</span>
-              </button>
-              <button
-                onClick={() => handleDiseaseExamplePick && handleDiseaseExamplePick('blight')}
-                className="bg-slate-50 hover:bg-amber-50 border px-3 py-1.5 rounded-xl text-[10px] font-bold text-slate-700 shrink-0 flex items-center space-x-1 cursor-pointer"
-              >
-                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-                <span>Blight Leaf Spot</span>
-              </button>
-              <button
-                onClick={() => handleDiseaseExamplePick && handleDiseaseExamplePick('rust')}
-                className="bg-slate-50 hover:bg-rose-50 border px-3 py-1.5 rounded-xl text-[10px] font-bold text-slate-700 shrink-0 flex items-center space-x-1 cursor-pointer"
-              >
-                <span className="w-2 h-2 rounded-full bg-rose-600"></span>
-                <span>Crop Blast Rust</span>
-              </button>
-            </div>
-          </div>
-
           {/* Leaf Image Preview or Upload Dropzone */}
           {selectedLeafImage ? (
-            <div className="relative w-full h-44 rounded-2xl overflow-hidden bg-slate-100 border border-emerald-100 flex items-center justify-center">
-              <img src={selectedLeafImage} alt="Leaf Preview" className="w-full h-full object-cover rounded-2xl" referrerPolicy="no-referrer" />
-              
-              {isDiagnosing && (
-                <div className="absolute inset-0 bg-emerald-950/60 flex flex-col items-center justify-center space-y-2">
-                  <div className="w-8 h-8 border-3 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
-                  <span className="text-xs font-black text-emerald-300 uppercase tracking-wider">Gemini Spore Analysis...</span>
-                </div>
-              )}
-              
-              {!isDiagnosing && (
-                <button 
-                  onClick={() => { setSelectedLeafImage(null); setDiagnosisReport(null); }} 
-                  className="absolute top-2 right-2 p-1.5 rounded-full bg-black/70 text-white hover:bg-black/90 cursor-pointer"
+            <div className="space-y-3">
+              <div className="relative w-full h-52 sm:h-60 rounded-2xl overflow-hidden bg-slate-900 border border-emerald-200 flex items-center justify-center shadow-inner">
+                <img
+                  src={selectedLeafImage}
+                  alt="Crop Leaf Preview"
+                  className="w-full h-full object-contain"
+                  referrerPolicy="no-referrer"
+                />
+
+                {isDiagnosing && (
+                  <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs flex flex-col items-center justify-center space-y-2.5 p-4 text-center">
+                    <div className="w-9 h-9 border-3 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-xs font-black text-emerald-300 uppercase tracking-wider block">
+                      {uploadProgressStatus || 'Gemini Spore Analysis...'}
+                    </span>
+                    <span className="text-[10px] text-emerald-100/70 font-medium">
+                      Diagnosing pathogen morphology with Gemini AI...
+                    </span>
+                  </div>
+                )}
+
+                {!isDiagnosing && (
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedLeafImage(null); setDiagnosisReport(null); }}
+                    className="absolute top-2.5 right-2.5 p-1.5 rounded-full bg-slate-900/80 hover:bg-slate-900 text-white cursor-pointer shadow-md transition-all active:scale-90"
+                    title="Remove photo"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Action Buttons: Analyze Photo & Change Photo */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  id="analyze_leaf_photo_btn"
+                  onClick={handleAnalyzePhoto}
+                  disabled={isDiagnosing || !selectedLeafImage}
+                  className={`py-3 px-3 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 transition-all shadow-md ${
+                    isDiagnosing
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                      : 'bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 text-white cursor-pointer active:scale-95 shadow-emerald-600/25'
+                  }`}
                 >
-                  <X className="w-4 h-4" />
+                  <Sparkles className="w-4 h-4" />
+                  <span>{isDiagnosing ? 'Analyzing...' : 'Analyze Photo'}</span>
                 </button>
-              )}
+
+                <button
+                  type="button"
+                  id="change_leaf_photo_btn"
+                  onClick={onOpenImagePicker || (() => hiddenFileInputRef.current?.click())}
+                  disabled={isDiagnosing}
+                  className={`py-3 px-3 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 border transition-all ${
+                    isDiagnosing
+                      ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                      : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 cursor-pointer active:scale-95 shadow-xs'
+                  }`}
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Change Photo</span>
+                </button>
+              </div>
             </div>
           ) : (
-            <div 
-              className="bg-emerald-50/50 border-2 border-dashed border-emerald-300 hover:border-emerald-600 rounded-3xl p-5 text-center cursor-pointer transition-all" 
-              onClick={() => hiddenFileInputRef.current?.click()}
+            <button
+              type="button"
+              id="scan_crop_leaf_photo_card"
+              onClick={onOpenImagePicker || (() => hiddenFileInputRef.current?.click())}
+              className="w-full bg-emerald-50/50 hover:bg-emerald-50/80 border-2 border-dashed border-emerald-300 hover:border-emerald-600 rounded-3xl p-6 text-center cursor-pointer transition-all group active:scale-[0.99]"
             >
-              <Camera className="w-8 h-8 mx-auto text-emerald-600 mb-1" />
+              <div className="w-14 h-14 bg-emerald-100 group-hover:bg-emerald-200 text-emerald-700 rounded-2xl flex items-center justify-center mx-auto mb-2.5 transition-colors shadow-xs">
+                <Camera className="w-7 h-7" />
+              </div>
               <p className="text-xs font-black text-slate-800">Scan Crop Leaf Photo</p>
-              <p className="text-[10px] text-slate-500 font-semibold mt-0.5">Take camera photo or pick gallery image for instant disease AI detection</p>
+              <p className="text-[10px] text-slate-500 font-semibold mt-0.5 max-w-xs mx-auto">
+                Take camera photo or pick gallery image for instant disease AI detection
+              </p>
               <input
                 type="file"
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp,image/jpg"
                 ref={hiddenFileInputRef}
                 className="hidden"
                 onChange={handleLeafImageUploadChange}
               />
-            </div>
+            </button>
           )}
 
           {/* Diagnosis Report Card */}
@@ -674,9 +1544,8 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
                   <span className="font-black text-emerald-950 text-sm">{diagnosisReport.diseaseName}</span>
                 </div>
                 <div className="flex items-center space-x-1">
-                  <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${
-                    diagnosisReport.severity === 'HIGH' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
-                  }`}>
+                  <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${diagnosisReport.severity === 'HIGH' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                    }`}>
                     {diagnosisReport.severity || 'MEDIUM'} Severity
                   </span>
                   {downloadCropHealthPdf && (
@@ -902,7 +1771,7 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
 
             <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 space-y-3">
               <span className="text-[10px] font-black uppercase tracking-wider text-indigo-900 block">📊 AI Yield Forecast:</span>
-              
+
               <div className="grid grid-cols-2 gap-2 text-center">
                 <div className="bg-white p-3 rounded-xl border border-indigo-100 shadow-2xs">
                   <span className="text-[9px] font-bold text-slate-400 uppercase block">Estimated Yield</span>
@@ -974,7 +1843,7 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
             {/* Timeline Milestones */}
             <div className="space-y-2 pt-1">
               <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block">Activity Milestones ({calendarCrop} - Sown in {sowingMonth}):</span>
-              
+
               <div className="space-y-2 border-l-2 border-emerald-500 pl-3 ml-1">
                 <div className="relative">
                   <div className="absolute -left-[17px] top-1 w-2.5 h-2.5 rounded-full bg-emerald-600 border-2 border-white"></div>
@@ -1084,12 +1953,21 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
       {/* 🚀 SUB-TOOL 8: GOVERNMENT SCHEMES */}
       {/* ========================================================================= */}
       {activeAiTool === 'schemes' && (
-        <KYCGovernmentBenefits
-          uid={fullUserProfile?.uid || 'guest_uid'}
-          initialProfile={fullUserProfile}
-          onClose={() => setActiveAiTool(null)}
-          triggerToast={triggerToast}
-        />
+        showKycInAdvisor ? (
+          <KYCGovernmentBenefits
+            uid={fullUserProfile?.uid || 'guest_uid'}
+            initialProfile={fullUserProfile}
+            onClose={() => setShowKycInAdvisor(false)}
+            triggerToast={triggerToast}
+          />
+        ) : (
+          <GovernmentSchemesModal
+            onClose={() => setActiveAiTool(null)}
+            onOpenKyc={() => setShowKycInAdvisor(true)}
+            currentLang={currentLang}
+            triggerToast={triggerToast}
+          />
+        )
       )}
 
       {/* ========================================================================= */}
@@ -1100,6 +1978,7 @@ export const AiAdvisorTabView: React.FC<AiAdvisorTabViewProps> = ({
           currentLang={currentLang as any}
           onClose={() => setActiveAiTool(null)}
           triggerToast={triggerToast}
+          uid={fullUserProfile?.uid}
         />
       )}
 

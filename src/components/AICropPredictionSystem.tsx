@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Sparkles, 
@@ -19,7 +19,10 @@ import {
   Award,
   ChevronRight,
   ChevronLeft,
-  ArrowRight
+  ArrowRight,
+  Search,
+  Loader2,
+  RefreshCw
 } from 'lucide-react';
 import { LanguageCode } from '../types';
 import { useI18n } from '../context/I18nContext';
@@ -382,16 +385,66 @@ export const AICropPredictionSystem: React.FC<AICropPredictionSystemProps> = ({
 
   const [activeIndex, setActiveIndex] = useState<number>(getInitialIndex());
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
+  const [customCropQuery, setCustomCropQuery] = useState<string>(initialCropName || '');
+  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
+  const [livePredictionResult, setLivePredictionResult] = useState<{
+    expectedDemand: string;
+    profitPotential: string;
+    climateRisk: string;
+    advisoryText: string;
+    cropName?: string;
+  } | null>(null);
 
   const activeCrop = PREDICTION_DATA_LIST[activeIndex];
 
+  const runAiPrediction = async (cropNameToQuery?: string) => {
+    const rawName = cropNameToQuery !== undefined ? cropNameToQuery : (customCropQuery.trim() || activeCrop.keyName);
+    if (!rawName.trim()) {
+      triggerToast('Please enter a crop name to predict.');
+      return;
+    }
+    setIsAnalyzing(true);
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    setIsSpeaking(false);
+    try {
+      const res = await fetch('/api/predict-crop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cropName: rawName.trim(),
+          language: activeLang
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setLivePredictionResult({ ...data, cropName: rawName.trim() });
+        triggerToast(`Live AI prediction generated for ${rawName.trim()}`);
+      } else {
+        triggerToast('AI prediction service unavailable. Showing verified benchmarks.');
+      }
+    } catch (e) {
+      console.warn('AI prediction fetch error:', e);
+      triggerToast('Offline mode: Using verified regional prediction baseline.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (initialCropName) {
+      runAiPrediction(initialCropName);
+    }
+  }, [initialCropName]);
+
   const handleNext = () => {
+    setLivePredictionResult(null);
     setActiveIndex((prev) => (prev + 1) % PREDICTION_DATA_LIST.length);
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     setIsSpeaking(false);
   };
 
   const handlePrev = () => {
+    setLivePredictionResult(null);
     setActiveIndex((prev) => (prev - 1 + PREDICTION_DATA_LIST.length) % PREDICTION_DATA_LIST.length);
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     setIsSpeaking(false);
@@ -406,25 +459,30 @@ export const AICropPredictionSystem: React.FC<AICropPredictionSystemProps> = ({
         return;
       }
 
-      const name = activeCrop.name[currentLang] || activeCrop.name['en'];
-      const profit = activeCrop.expectedProfitRange[currentLang] || activeCrop.expectedProfitRange['en'];
-      const demand = activeCrop.expectedDemand;
-      const narrative = activeCrop.narrativeInsight[currentLang] || activeCrop.narrativeInsight['en'];
-      const mandi = activeCrop.mandiPriceAnalysis[currentLang] || activeCrop.mandiPriceAnalysis['en'];
-
       let message = '';
-      if (currentLang === 'kn') {
-        message = `${t.title}. ಬೆಳೆ: ${name}. ಮಾರುಕಟ್ಟೆ ಬೇಡಿಕೆ ಮಟ್ಟ: ${demand}. ನಿರೀಕ್ಷಿತ ಆದಾಯ: ${profit}. ಎಪಿಎಂಸಿ ದರ ವಿಶ್ಲೇಷಣೆ: ${mandi}. ಹವಾಮಾನ ಸಲಹೆ: ${narrative}`;
-      } else if (currentLang === 'hi') {
-        message = `${t.title} रिपोर्ट। फसल: ${name}। बाजार मांग: ${demand}। कुल लाभ अनुमान: ${profit}। मंडी भाव समीक्षा: ${mandi}। कृषि वैज्ञानिक निर्देश: ${narrative}`;
+      if (livePredictionResult) {
+        const crop = livePredictionResult.cropName || customCropQuery || 'Crop';
+        message = `AI Future Sowing Report for ${crop}. Expected demand: ${livePredictionResult.expectedDemand}. Profit potential: ${livePredictionResult.profitPotential}. Climate risk: ${livePredictionResult.climateRisk}. Advisory: ${livePredictionResult.advisoryText}`;
       } else {
-        message = `AI Future Sowing Report for ${name}. Expected global demand level is evaluated as ${demand}, offering a return estimate of ${profit}. Mandi analysis: ${mandi}. Climate advisory instructions: ${narrative}`;
+        const name = activeCrop.name[activeLang as any] || activeCrop.name['en'];
+        const profit = activeCrop.expectedProfitRange[activeLang as any] || activeCrop.expectedProfitRange['en'];
+        const demand = activeCrop.expectedDemand;
+        const narrative = activeCrop.narrativeInsight[activeLang as any] || activeCrop.narrativeInsight['en'];
+        const mandi = activeCrop.mandiPriceAnalysis[activeLang as any] || activeCrop.mandiPriceAnalysis['en'];
+
+        if (activeLang === 'kn') {
+          message = `${t.title}. ಬೆಳೆ: ${name}. ಮಾರುಕಟ್ಟೆ ಬೇಡಿಕೆ ಮಟ್ಟ: ${demand}. ನಿರೀಕ್ಷಿತ ಆದಾಯ: ${profit}. ಎಪಿಎಂಸಿ ದರ ವಿಶ್ಲೇಷಣೆ: ${mandi}. ಹವಾಮಾನ ಸಲಹೆ: ${narrative}`;
+        } else if (activeLang === 'hi') {
+          message = `${t.title} रिपोर्ट। फसल: ${name}। बाजार मांग: ${demand}। कुल लाभ अनुमान: ${profit}। मंडी भाव समीक्षा: ${mandi}। कृषि वैज्ञानिक निर्देश: ${narrative}`;
+        } else {
+          message = `AI Future Sowing Report for ${name}. Expected global demand level is evaluated as ${demand}, offering a return estimate of ${profit}. Mandi analysis: ${mandi}. Climate advisory instructions: ${narrative}`;
+        }
       }
 
       const utterance = new SpeechSynthesisUtterance(message);
       
-      if (currentLang === 'kn') utterance.lang = 'kn-IN';
-      else if (currentLang === 'hi') utterance.lang = 'hi-IN';
+      if (activeLang === 'kn') utterance.lang = 'kn-IN';
+      else if (activeLang === 'hi') utterance.lang = 'hi-IN';
       else utterance.lang = 'en-IN';
 
       utterance.onend = () => setIsSpeaking(false);
@@ -433,7 +491,7 @@ export const AICropPredictionSystem: React.FC<AICropPredictionSystemProps> = ({
       setIsSpeaking(true);
       window.speechSynthesis.speak(utterance);
     } else {
-      triggerToast('Audio speech synthesis is not supported inside frame options.');
+      triggerToast('Audio speech synthesis is not supported on this browser.');
     }
   };
 
@@ -477,6 +535,98 @@ export const AICropPredictionSystem: React.FC<AICropPredictionSystemProps> = ({
         {/* Swipeable Prediction Card Carousel container */}
         <div className="p-4 space-y-4">
           
+          {/* Dynamic AI Crop Query Box */}
+          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 space-y-2">
+            <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-600" /> Query Any Crop with Gemini AI
+            </span>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={customCropQuery}
+                  onChange={(e) => setCustomCropQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') runAiPrediction(); }}
+                  placeholder="e.g. Ginger, Chilli, Mustard, Maize..."
+                  className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+              <button
+                onClick={() => runAiPrediction()}
+                disabled={isAnalyzing}
+                className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center space-x-1 cursor-pointer transition-all active:scale-95 shadow-xs"
+              >
+                {isAnalyzing ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="w-3.5 h-3.5" />
+                )}
+                <span>{isAnalyzing ? 'Analyzing...' : 'Predict'}</span>
+              </button>
+            </div>
+            {/* Quick Suggestion Chips */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar text-[10px]">
+              {['Ginger', 'Chilli', 'Garlic', 'Wheat', 'Maize', 'Soyabean', 'Turmeric'].map((c) => (
+                <button
+                  key={c}
+                  onClick={() => { setCustomCropQuery(c); runAiPrediction(c); }}
+                  className="px-2 py-0.5 bg-white border border-slate-200 hover:border-emerald-400 text-slate-600 hover:text-emerald-800 rounded-lg whitespace-nowrap font-semibold cursor-pointer transition-all"
+                >
+                  + {c}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Live Gemini AI Forecast Card (if active) */}
+          {livePredictionResult && (
+            <div className="bg-gradient-to-br from-emerald-950 via-teal-950 to-slate-900 text-white rounded-[28px] p-4.5 border border-emerald-500/30 shadow-xl space-y-3 animate-fade-in">
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-yellow-300" /> Live Gemini Market Forecast
+                </span>
+                <button
+                  onClick={() => setLivePredictionResult(null)}
+                  className="text-[10px] text-slate-400 hover:text-white font-bold underline cursor-pointer"
+                >
+                  Close Live Result
+                </button>
+              </div>
+
+              <div>
+                <h3 className="text-base font-black text-white flex items-center gap-2">
+                  <Leaf className="w-4 h-4 text-emerald-400" />
+                  <span>{livePredictionResult.cropName?.toUpperCase() || 'CROP FORECAST'}</span>
+                </h3>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
+                <div className="bg-white/10 rounded-xl p-2 border border-white/10">
+                  <span className="text-slate-300 block text-[8px] uppercase font-black">Demand</span>
+                  <span className="font-black text-yellow-300 text-xs">{livePredictionResult.expectedDemand}</span>
+                </div>
+                <div className="bg-white/10 rounded-xl p-2 border border-white/10">
+                  <span className="text-slate-300 block text-[8px] uppercase font-black">Profit</span>
+                  <span className="font-black text-emerald-300 text-xs">{livePredictionResult.profitPotential}</span>
+                </div>
+                <div className="bg-white/10 rounded-xl p-2 border border-white/10">
+                  <span className="text-slate-300 block text-[8px] uppercase font-black">Risk</span>
+                  <span className="font-black text-amber-300 text-xs">{livePredictionResult.climateRisk}</span>
+                </div>
+              </div>
+
+              <div className="bg-white/10 rounded-2xl p-3 border border-white/10 space-y-1">
+                <span className="text-[9px] font-black uppercase text-emerald-300 tracking-wider block">
+                  AI Advisor Directives
+                </span>
+                <p className="text-xs text-slate-100 font-medium leading-relaxed">
+                  {livePredictionResult.advisoryText}
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="relative bg-gradient-to-b from-slate-50 to-slate-100/50 rounded-[28px] p-4.5 border border-slate-100 shadow-inner">
             
             {/* Header controls inside card */}
@@ -544,9 +694,23 @@ export const AICropPredictionSystem: React.FC<AICropPredictionSystemProps> = ({
               </div>
               <div className="bg-white border border-slate-150 rounded-2xl p-2.5">
                 <span className="block text-[8px] uppercase font-black text-slate-400 mb-0.5">{t.estInvest}</span>
-                <span className="text-[11.5px] font-black text-slate-700">{activeCrop.investmentRequired[currentLang] || activeCrop.investmentRequired['en']}</span>
+                <span className="text-[11.5px] font-black text-slate-700">{activeCrop.investmentRequired[currentLang || 'en'] || activeCrop.investmentRequired['en']}</span>
               </div>
             </div>
+
+            {/* Instant Live AI Query for active card */}
+            <button
+              onClick={() => runAiPrediction(activeCrop.name[activeLang as any] || activeCrop.keyName)}
+              disabled={isAnalyzing}
+              className="w-full mt-3 py-2 px-3 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-xl text-xs font-black flex items-center justify-center space-x-1.5 cursor-pointer transition-all active:scale-[0.98] shadow-xs"
+            >
+              {isAnalyzing ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5 text-yellow-300" />
+              )}
+              <span>{isAnalyzing ? 'Querying Gemini...' : `Get Live Gemini Forecast for ${(activeCrop.name[activeLang as any] || activeCrop.keyName).split(' ')[0]}`}</span>
+            </button>
           </div>
 
           {/* Clean, lightweight custom SVG chart displaying seasonal demand shift trends */}

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" fill="none">
+  <defs>
+    <linearGradient id="bgGrad192" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#065f46"/>
+      <stop offset="50%" stop-color="#047857"/>
+      <stop offset="100%" stop-color="#022c22"/>
+    </linearGradient>
+    <linearGradient id="leafGrad192" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="goldGrad192" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fef08a"/>
+      <stop offset="100%" stop-color="#eab308"/>
+    </linearGradient>
+  </defs>
+  <rect width="192" height="192" rx="48" fill="url(#bgGrad192)"/>
+  <path d="M96 36 C 135 36, 156 63, 156 102 C 156 141, 120 156, 96 156 C 72 156, 36 141, 36 102 C 36 63, 57 36, 96 36 Z" fill="url(#leafGrad192)"/>
+  <path d="M96 48 C 96 82, 96 117, 96 150" stroke="#064e3b" stroke-width="6" stroke-linecap="round"/>
+  <path d="M96 82 C 109 71, 128 73, 135 79" stroke="#064e3b" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M96 105 C 83 94, 64 96, 56 101" stroke="#064e3b" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M142 34 L146 45 L157 49 L146 53 L142 64 L138 53 L127 49 L138 45 Z" fill="url(#goldGrad192)"/>
+</svg>

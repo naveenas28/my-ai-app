@@ -30,8 +30,8 @@ import {
   FileText,
   Bookmark,
   ShieldCheck,
-  Check,
-  RotateCcw
+  RotateCcw,
+  Image as ImageIcon
 } from 'lucide-react';
 import { TRANSLATIONS, LANGUAGES, MOCK_WEATHER_ALERTS, MOCK_CROP_PRICES, MOCK_COMMUNITY_FEED, MOCK_MARKET_ITEMS, MOCK_GOV_SCHEMES } from './data';
 import { LanguageCode, Post, PostLocation, ProductItem, GovernmentScheme, CropPrice } from './types';
@@ -41,12 +41,12 @@ import { SmartIrrigationAdvisor } from './components/SmartIrrigationAdvisor';
 import { AICropPredictionSystem } from './components/AICropPredictionSystem';
 import { VoicePostsSystem } from './components/VoicePostsSystem';
 import { FarmerChatSystem } from './components/FarmerChatSystem';
-import { CooperativeNetwork } from './components/CooperativeNetwork';
 import { auth, googleProvider, RecaptchaVerifier, signInWithPhoneNumber } from './firebase';
 import { signInAnonymously, onAuthStateChanged, signOut, signInWithPopup, ConfirmationResult } from 'firebase/auth';
 import { syncUserInFirestore, syncAuthUserWithFirestore, getUserProfile, saveFarmerProfile, UserProfileDoc } from './services/userService';
 import { FarmerProfileForm } from './components/FarmerProfileForm';
 import { KYCGovernmentBenefits } from './components/KYCGovernmentBenefits';
+import { GovernmentSchemesModal } from './components/GovernmentSchemesModal';
 import { HomeTabView } from './components/HomeTabView';
 import { CommunityTabView } from './components/CommunityTabView';
 import { MarketplaceTabView } from './components/MarketplaceTabView';
@@ -58,7 +58,21 @@ import { getLiveWeather, WeatherData } from './services/weatherService';
 import { subscribeToReminders, addReminderInFirestore, toggleReminderInFirestore, deleteReminderInFirestore, FarmingReminder } from './services/reminderService';
 import { fetchGovernmentSchemes, GovernmentSchemeDoc } from './services/schemeService';
 import { fetchLiveMarketPrices } from './services/marketPriceService';
-import { diagnoseAndSaveCropImage, downloadCropHealthPdf } from './services/cropDoctorService';
+import { cleanTextForSpeech } from './utils/cleanTextForSpeech';
+import {
+  checkMicrophonePermission,
+  getSpeechRecognitionClass,
+  getKrishiVoiceErrorMessage,
+  getBestSpeechSynthesisVoice,
+  KRISHI_VOICE_LANG_MAP,
+  MicPermissionState
+} from './services/krishiVoiceAssistant';
+import {
+  diagnoseAndSaveCropImage,
+  downloadCropHealthPdf,
+  fetchUserScanHistory,
+  deleteUserScanHistoryItem
+} from './services/cropDoctorService';
 import {
   subscribeToCommunityPosts,
   createCommunityPost,
@@ -67,6 +81,7 @@ import {
   syncSavedPosts,
   syncFollowedFarmers
 } from './services/communityService';
+import { notificationService } from './services/notificationService';
 
 declare global {
   interface Window {
@@ -80,16 +95,35 @@ export default function App() {
   const currentLang = language;
   const setCurrentLang = (newLang: LanguageCode) => setLanguage(newLang);
 
+  const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  // Network Online/Offline state monitor
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      triggerVisualToast('🟢 Connected to Live Agricultural Network');
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      triggerVisualToast('📡 Offline Mode: Displaying verified local agricultural data.');
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   const [activeTab, setActiveTab] = useState<'home' | 'community' | 'marketplace' | 'assistant' | 'profile'>('home');
   const [activeSubPage, setActiveSubPage] = useState<'weather' | 'cropDoctor' | 'waterTracker' | 'govSchemes' | null>(null);
   const [activeAiTool, setActiveAiTool] = useState<'chat' | 'cropPrediction' | 'pest' | 'soil' | 'yield' | 'finance' | 'voice' | 'sustainability' | null>(null);
-  const [activeMarketTool, setActiveMarketTool] = useState<'listings' | 'sellForm' | 'mandi' | 'machinery' | 'logistics' | null>('listings');
-  const [activeCommunityTool, setActiveCommunityTool] = useState<'feed' | 'voice' | 'chat' | 'cooperative'>('feed');
+  const [activeMarketTool, setActiveMarketTool] = useState<'listings' | 'sellForm' | 'mandi' | null>('listings');
+  const [activeCommunityTool, setActiveCommunityTool] = useState<'feed' | 'voice' | 'chat'>('feed');
   const [activeProfileTool, setActiveProfileTool] = useState<'overview' | 'editForm' | 'farmInfo' | 'kyc' | 'language' | 'settings'>('overview');
   const [showWeatherHub, setShowWeatherHub] = useState<boolean>(false);
   const [showIrrigationHub, setShowIrrigationHub] = useState<boolean>(false);
   const [showCropPredictionHub, setShowCropPredictionHub] = useState<boolean>(false);
-  const [showCooperativeHub, setShowCooperativeHub] = useState<boolean>(false);
   const [assistantMode, setAssistantMode] = useState<'doctor' | 'chat'>('doctor');
 
   const [expandedSchemeId, setExpandedSchemeId] = useState<string | null>(null);
@@ -303,7 +337,7 @@ export default function App() {
   const [postDistrict, setPostDistrict] = useState<string>('Chikkaballapura');
   const [postVillage, setPostVillage] = useState<string>('Anemadagu');
   const [voiceRecordDuration, setVoiceRecordDuration] = useState<number>(0);
-  
+
   // Real AI content assistance cache mappings
   const [aiSummaries, setAiSummaries] = useState<Record<string, string>>({});
   const [aiTranslations, setAiTranslations] = useState<Record<string, string>>({});
@@ -326,13 +360,56 @@ export default function App() {
   const [newCropLocation, setNewCropLocation] = useState<string>('');
   const [showSellForm, setShowSellForm] = useState<boolean>(false);
 
-  // Simulated Voice / Speech-to-text recording system states
+  // Voice / Speech-to-text recording system states & refs
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [recordedSpeechPrompt, setRecordedSpeechPrompt] = useState<string>('');
+  const speechRecognitionRef = useRef<any>(null);
+  const isRecordingRef = useRef<boolean>(false);
+  const voiceSilenceTimerRef = useRef<any>(null);
+  const micPermissionStateRef = useRef<MicPermissionState | null>(null);
+  const krishiActiveUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
+
+  useEffect(() => {
+    return () => {
+      if (voiceSilenceTimerRef.current) {
+        clearTimeout(voiceSilenceTimerRef.current);
+        voiceSilenceTimerRef.current = null;
+      }
+      if (speechRecognitionRef.current) {
+        try {
+          speechRecognitionRef.current.onstart = null;
+          speechRecognitionRef.current.onresult = null;
+          speechRecognitionRef.current.onerror = null;
+          speechRecognitionRef.current.onend = null;
+          speechRecognitionRef.current.abort();
+        } catch (e) {}
+        speechRecognitionRef.current = null;
+      }
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        krishiActiveUtteranceRef.current = null;
+        (window as any).__krishiActiveUtterance = null;
+      }
+    };
+  }, []);
 
   // AI Chat states
   const [chatInput, setChatInput] = useState<string>('');
-  const [chatHistory, setChatHistory] = useState<{ sender: 'user' | 'ai'; text: string; time: string }[]>([
+  const [chatAttachedImage, setChatAttachedImage] = useState<string | null>(null);
+  const [chatHistory, setChatHistory] = useState<{
+    sender: 'user' | 'ai';
+    text: string;
+    time: string;
+    image?: string;
+    isError?: boolean;
+    sources?: any[];
+    category?: string;
+    sourceLabel?: string;
+  }[]>([
     {
       sender: 'ai',
       text: 'Hello! I am AgriVerse AI crop, weather, and market specialist. Tap the microphone or write your agricultural doubts to solve them instantly.',
@@ -367,6 +444,7 @@ export default function App() {
   const [liveWeather, setLiveWeather] = useState<WeatherData | null>(null);
   const [isLoadingWeather, setIsLoadingWeather] = useState<boolean>(true);
   const [govSchemesList, setGovSchemesList] = useState<GovernmentSchemeDoc[]>([]);
+  const [showGovSchemesModal, setShowGovSchemesModal] = useState<boolean>(false);
   const [mandiPricesList, setMandiPricesList] = useState<CropPrice[]>(MOCK_CROP_PRICES);
 
   // Irrigation & Farming reminders state connected to real-time Firestore
@@ -469,7 +547,11 @@ export default function App() {
   const hiddenPostImageInputRef = useRef<HTMLInputElement>(null);
   const hiddenProductImageInputRef = useRef<HTMLInputElement>(null);
 
-  // Refs for auto-scroll in chats & file uploads
+  // Crop Doctor Camera / Gallery Selection & Webcam States
+  const [showImagePickerModal, setShowImagePickerModal] = useState<boolean>(false);
+  const [showWebcamModal, setShowWebcamModal] = useState<boolean>(false);
+  const webcamVideoRef = useRef<HTMLVideoElement>(null);
+  const webcamStreamRef = useRef<MediaStream | null>(null);
 
   // Auto scroll chats
   useEffect(() => {
@@ -496,10 +578,15 @@ export default function App() {
 
   const fetchScanHistory = async () => {
     try {
-      const res = await fetch('/api/disease-reports');
-      if (res.ok) {
-        const data = await res.json();
+      const data = await fetchUserScanHistory(firebaseAuthUid);
+      if (data && data.length > 0) {
         setScanHistory(data);
+      } else {
+        const res = await fetch('/api/disease-reports');
+        if (res.ok) {
+          const serverData = await res.json();
+          setScanHistory(serverData);
+        }
       }
     } catch (e) {
       console.warn('Failed to fetch scan history', e);
@@ -508,11 +595,9 @@ export default function App() {
 
   const deleteScanHistoryItem = async (id: string) => {
     try {
-      const res = await fetch(`/api/disease-reports/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        triggerVisualToast('Scan report completely deleted.');
-        fetchScanHistory();
-      }
+      await deleteUserScanHistoryItem(id);
+      triggerVisualToast('Scan report completely deleted.');
+      fetchScanHistory();
     } catch (e) {
       console.error(e);
       triggerVisualToast('Failed to delete report.');
@@ -521,7 +606,12 @@ export default function App() {
 
   const fetchExpenses = async () => {
     try {
-      const res = await fetch('/api/budget');
+      const activeUid = firebaseAuthUid || localStorage.getItem('agri_user_uid') || 'guest';
+      const res = await fetch('/api/budget', {
+        headers: {
+          'x-user-id': activeUid
+        }
+      });
       if (res.ok) {
         const data = await res.json();
         setExpenses(data);
@@ -538,7 +628,7 @@ export default function App() {
         const postsData = await postsRes.json();
         setPosts(postsData);
       }
-      
+
       const prodRes = await fetch('/api/products');
       if (prodRes.ok) {
         const prodData = await prodRes.json();
@@ -549,25 +639,92 @@ export default function App() {
     }
   };
 
-  // Sound TTS (Text-to-Speech) using high compatibility Web Speech API
-  const speakVoiceOutput = (phrase: string) => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      // Resolve language prefix codes
-      let utterLang = 'en-IN';
-      if (currentLang === 'hi') utterLang = 'hi-IN';
-      if (currentLang === 'kn') utterLang = 'kn-IN';
-      if (currentLang === 'ta') utterLang = 'ta-IN';
-      if (currentLang === 'te') utterLang = 'te-IN';
-      if (currentLang === 'ml') utterLang = 'ml-IN';
-      if (currentLang === 'bn') utterLang = 'bn-IN';
-
-      const utterance = new SpeechSynthesisUtterance(phrase);
-      utterance.lang = utterLang;
-      utterance.rate = 0.95; // Slightly slower for elderly clear understanding
-      window.speechSynthesis.speak(utterance);
-    } else {
+  // Sound TTS (Text-to-Speech) using high compatibility Web Speech API (Zero-Cost)
+  const speakVoiceOutput = (phrase: string, onEnd?: () => void, lang?: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      console.log('[Krishi TTS] TTS error: speechSynthesis not supported on this device');
       triggerVisualToast('Your mobile device does not support voice playback engine.');
+      if (onEnd) onEnd();
+      return;
+    }
+
+    try {
+      window.speechSynthesis.cancel();
+      krishiActiveUtteranceRef.current = null;
+      if (typeof window !== 'undefined') {
+        (window as any).__krishiActiveUtterance = null;
+      }
+
+      // Clean Markdown formatting, bullets, emojis, and artifacts before speech synthesis
+      const cleanPhrase = cleanTextForSpeech(phrase);
+      if (!cleanPhrase || !cleanPhrase.trim()) {
+        console.log('[Krishi TTS] TTS ended (clean phrase empty)');
+        if (onEnd) onEnd();
+        return;
+      }
+
+      // Resolve language prefix codes
+      const activeLang = lang || currentLang || 'en';
+      const utterLang = KRISHI_VOICE_LANG_MAP[activeLang] || 'en-IN';
+
+      const utterance = new SpeechSynthesisUtterance(cleanPhrase);
+      utterance.lang = utterLang;
+      utterance.rate = 1.0; // Natural speech rate
+      utterance.pitch = 1.0; // Natural pitch
+
+      // Select closest available browser speech voice based on user's selected language
+      const matchedVoice = getBestSpeechSynthesisVoice(activeLang);
+      if (matchedVoice) {
+        utterance.voice = matchedVoice;
+        console.log(`[Krishi Voice] matched voice: ${matchedVoice.name} (${matchedVoice.lang}) for language: ${activeLang}`);
+      }
+
+      // Retain utterance reference on ref and window to prevent Chromium garbage collection mid-speech
+      krishiActiveUtteranceRef.current = utterance;
+      if (typeof window !== 'undefined') {
+        (window as any).__krishiActiveUtterance = utterance;
+      }
+
+      let isFinished = false;
+      const finishUtterance = (isError = false, errEvent?: any) => {
+        if (isFinished) return;
+        isFinished = true;
+        krishiActiveUtteranceRef.current = null;
+        if (typeof window !== 'undefined') {
+          (window as any).__krishiActiveUtterance = null;
+        }
+        if (isError) {
+          console.log('[Krishi TTS] TTS error:', errEvent || 'playback error');
+        } else {
+          console.log('[Krishi TTS] TTS ended');
+        }
+        if (onEnd) onEnd();
+      };
+
+      utterance.onstart = () => {
+        console.log('[Krishi TTS] TTS started');
+      };
+
+      utterance.onend = () => {
+        finishUtterance(false);
+      };
+
+      utterance.onerror = (e) => {
+        finishUtterance(true, e);
+      };
+
+      // Slight timeout prevents Chrome sync cancel bug
+      setTimeout(() => {
+        try {
+          window.speechSynthesis.speak(utterance);
+        } catch (speakErr) {
+          console.log('[Krishi TTS] TTS error:', speakErr);
+          finishUtterance(true, speakErr);
+        }
+      }, 50);
+    } catch (err: any) {
+      console.log('[Krishi TTS] TTS error:', err?.message || err);
+      if (onEnd) onEnd();
     }
   };
 
@@ -805,13 +962,24 @@ export default function App() {
     triggerVisualToast('Session securely cleared.');
   };
 
-  // Core API call for Chatbot
-  const triggerSendChatMessage = async (typedText: string) => {
-    const query = typedText.trim();
-    if (!query) return;
+  // Core API call for Chatbot - SINGLE SOURCE OF TRUTH (POST /api/chat)
+  const triggerSendChatMessage = async (typedText: string, attachedImageBase64?: string | null) => {
+    const query = (typedText || '').trim();
+    const imageToSend = attachedImageBase64 || chatAttachedImage;
+    if (!query && !imageToSend) return;
 
-    setChatHistory(prev => [...prev, { sender: 'user', text: query, time: 'Just now' }]);
+    const userDisplayMsg = query || 'Uploaded crop image for diagnosis';
+    setChatHistory(prev => [
+      ...prev,
+      {
+        sender: 'user',
+        text: userDisplayMsg,
+        time: 'Just now',
+        image: imageToSend || undefined
+      }
+    ]);
     setChatInput('');
+    setChatAttachedImage(null);
     setIsChatLoading(true);
 
     try {
@@ -822,124 +990,274 @@ export default function App() {
         },
         body: JSON.stringify({
           message: query,
+          image: imageToSend || undefined,
+          imageBase64: imageToSend || undefined,
           language: currentLang,
+          uid: firebaseAuthUid || 'guest_farmer',
+          farmerProfile: fullUserProfile || {
+            name: firebaseAuthName || 'Farmer Partner',
+            village: postVillage || 'Anemadagu',
+            district: postDistrict || 'Chikkaballapura',
+            state: 'Karnataka',
+            farmSizeAcres: 3.5,
+            soilType: 'Red Sandy Loam',
+            waterSource: 'Borewell with Drip System',
+            primaryCrops: ['Tomato', 'Ragi']
+          },
+          history: chatHistory.slice(-8).map(c => ({
+            role: c.sender === 'user' ? 'user' : 'model',
+            content: c.text
+          }))
         }),
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        setChatHistory(prev => [...prev, { sender: 'ai', text: data.text, time: 'Just now' }]);
-        // Automatically speak response for semi-literate accessibility
-        speakVoiceOutput(data.text);
+      const data = await response.json().catch(() => null);
+
+      if (response.ok && data && data.success !== false && !data.error) {
+        const replyText = data.response || data.reply || data.text || '';
+        setChatHistory(prev => [...prev, {
+          sender: 'ai',
+          text: replyText,
+          time: 'Just now',
+          sources: data.sources || [],
+          category: data.category,
+          sourceLabel: data.sourceLabel
+        }]);
+        // Automatically speak response for voice output accessibility
+        speakVoiceOutput(replyText);
+
+        // If a reminder was created by the agent, sync directly into Firestore reminders collection
+        if (data.toolsUsed && data.toolsUsed.includes('createReminder')) {
+          try {
+            const taskText = query.replace(/create a reminder to|remind me to|remind me/gi, '').trim() || query;
+            await addReminderInFirestore(firebaseAuthUid || 'farmer_user', taskText);
+          } catch (remErr) {
+            console.warn('Sync reminder to Firestore handled:', remErr);
+          }
+        }
       } else {
-        throw new Error('API server busy');
+        const errorText = data?.error || data?.response || 'AI service is temporarily unavailable. Please try again.';
+        setChatHistory(prev => [...prev, { sender: 'ai', text: errorText, time: 'Just now', isError: true }]);
       }
     } catch (e: any) {
-      // Automatic organic translation fallback of data structure
-      const localResponse = getLocalFallbackReply(query);
-      setChatHistory(prev => [...prev, { sender: 'ai', text: localResponse, time: 'Just now' }]);
-      speakVoiceOutput(localResponse);
+      console.error('[Chat Error]:', e);
+      const errorMsg = 'AI service is temporarily unavailable. Please try again.';
+      setChatHistory(prev => [...prev, { sender: 'ai', text: errorMsg, time: 'Just now', isError: true }]);
     } finally {
       setIsChatLoading(false);
     }
   };
 
-  // Local fallback response mapping when endpoint has transient delays
-  const getLocalFallbackReply = (promptText: string): string => {
-    const inputClean = promptText.toLowerCase();
-    if (currentLang === 'kn') {
-      if (inputClean.includes('tomato') || inputClean.includes('ಟೊಮೆಟೊ')) {
-        return 'ಟೊಮೆಟೊ ಬೆಳೆಗೆ ಸಂಬಂಧಿಸಿದ ಮಾಹಿತಿ: ತೇವಾಂಶವುಳ್ಳ ವಾತಾವರಣದಲ್ಲಿ ರೋಗಬಾಧೆ ಹೆಚ್ಚು. ಕೆಳಗಿನ ಎಲೆಗಳಲ್ಲಿ ಕಪ್ಪು ವಲಯಗಳು ಕಂಡುಬಂದರೆ ಮ್ಯಾಂಕೋಜೆಬ್ ೨g/ಲೀಟರ್ ನೀರನ್ನು ಸಿಂಪಡಿಸಿ.';
-      }
-      return 'ರೈತ ಮಿತ್ರರೇ, ಮಣ್ಣಿನ ತೇವಾಂಶ ಮತ್ತು ಇಂದಿನ ಮಾರುಕಟ್ಟೆ ಬೆಲೆಯನ್ನು ನಮ್ಮ ಸಿಸ್ಟಮ್ ಯಶಸ್ವಿಯಾಗಿ ಗುರುತಿಸಿದೆ. ಹೆಚ್ಚಿನ ವಿವರಗಳಿಗಾಗಿ ಕೇಳಿ!';
-    }
-    if (currentLang === 'hi') {
-      if (inputClean.includes('tomato') || inputClean.includes('टमाटर')) {
-        return 'टमाटर संरक्षण: Early Blight कवक से बचने के लिए मैंकोजेब (Mancozeb) 2g/L का छिडकाव करें। फल सड़ने से बचाने के लिए उचित हवा आने दें।';
-      }
-      return 'नमस्ते! आपकी कन्यूमरी रिपोर्ट अभी अपडेट की गई है। क्या आप मौसम की चेतावनी या खाद सुझावों के बारे में जानना चाहते हैं?';
-    }
-    return 'Thank you! To secure ideal yield pricing, please keep the soil moisture levels above index 3 and inspect crops daily. Ask me anything more about pesticide selection or mandi rates.';
+  const clearChatHistory = () => {
+    setChatHistory([]);
+    setChatAttachedImage(null);
+    triggerVisualToast('Chat cleared. Started a fresh conversation.');
   };
 
-  const startVoiceRecordingTrigger = () => {
-    setIsRecording(true);
-    setRecordedSpeechPrompt('');
+  const stopKrishiVoiceRecognition = () => {
+    if (voiceSilenceTimerRef.current) {
+      clearTimeout(voiceSilenceTimerRef.current);
+      voiceSilenceTimerRef.current = null;
+    }
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.stop();
+      } catch (e) {}
+    }
+    setIsRecording(false);
+  };
 
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
-      const langMapping: Record<LanguageCode, string> = {
-        en: 'en-IN',
-        kn: 'kn-IN',
-        ta: 'ta-IN',
-        hi: 'hi-IN',
-        te: 'te-IN',
-        ml: 'ml-IN',
-        bn: 'bn-IN',
-        mr: 'mr-IN',
-        pa: 'pa-IN'
-      };
-      recognition.lang = langMapping[currentLang] || 'en-IN';
-      recognition.interimResults = false;
+  const startVoiceRecordingTrigger = async (
+    onSpeechCaptured?: (finalText: string) => void,
+    onInterimSpeech?: (interim: string) => void,
+    onListeningStateChange?: (listening: boolean) => void,
+    onError?: (errorMessage: string) => void
+  ) => {
+    // If already recording/listening, clicking microphone stops listening
+    if (isRecordingRef.current) {
+      stopKrishiVoiceRecognition();
+      if (onListeningStateChange) onListeningStateChange(false);
+      triggerVisualToast('Voice listening stopped.');
+      return;
+    }
+
+    // Cancel any active speech playback before listening
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      krishiActiveUtteranceRef.current = null;
+      (window as any).__krishiActiveUtterance = null;
+    }
+
+    // 1. Check browser support
+    const SpeechRecognitionClass = getSpeechRecognitionClass();
+    const isSupported = !!SpeechRecognitionClass;
+    console.log('[Krishi Voice] recognition supported:', isSupported);
+
+    if (!isSupported) {
+      const errMsg = getKrishiVoiceErrorMessage('browser-not-supported', null);
+      triggerVisualToast(errMsg);
+      if (onError) onError(errMsg);
+      return;
+    }
+
+    // 2. Check and request microphone permission correctly
+    const permState = await checkMicrophonePermission();
+    micPermissionStateRef.current = permState;
+    console.log('[Krishi Voice] microphone permission state:', permState);
+
+    if (permState === 'denied') {
+      const errMsg = getKrishiVoiceErrorMessage('not-allowed', 'denied');
+      triggerVisualToast(errMsg);
+      if (onError) onError(errMsg);
+      return;
+    }
+
+    // Clean up any lingering previous instance before starting fresh
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.onstart = null;
+        speechRecognitionRef.current.onresult = null;
+        speechRecognitionRef.current.onerror = null;
+        speechRecognitionRef.current.onend = null;
+        speechRecognitionRef.current.abort();
+      } catch (e) {}
+      speechRecognitionRef.current = null;
+    }
+
+    if (voiceSilenceTimerRef.current) {
+      clearTimeout(voiceSilenceTimerRef.current);
+      voiceSilenceTimerRef.current = null;
+    }
+
+    try {
+      const recognition = new SpeechRecognitionClass();
+      speechRecognitionRef.current = recognition;
+
+      recognition.continuous = false;
+      recognition.interimResults = true;
       recognition.maxAlternatives = 1;
+      recognition.lang = KRISHI_VOICE_LANG_MAP[currentLang] || 'en-IN';
+
+      let hasReceivedResult = false;
+      let capturedFinalText = '';
+      let latestInterimText = '';
+
+      // 12-second silence fallback timer
+      voiceSilenceTimerRef.current = setTimeout(() => {
+        if (!hasReceivedResult && speechRecognitionRef.current) {
+          try {
+            speechRecognitionRef.current.stop();
+          } catch (e) {}
+          setIsRecording(false);
+          if (onListeningStateChange) onListeningStateChange(false);
+          triggerVisualToast('No speech was detected within 12 seconds. Tap the microphone to try again.');
+        }
+      }, 12000);
+
+      recognition.onstart = () => {
+        console.log('[Krishi Voice] speech recognition started');
+        setIsRecording(true);
+        if (onListeningStateChange) onListeningStateChange(true);
+        triggerVisualToast('🎤 Listening...');
+      };
+
+      recognition.onspeechstart = () => {
+        if (voiceSilenceTimerRef.current) {
+          clearTimeout(voiceSilenceTimerRef.current);
+          voiceSilenceTimerRef.current = null;
+        }
+      };
 
       recognition.onresult = (event: any) => {
-        const speechToText = event.results[0][0].transcript;
-        setIsRecording(false);
-        triggerSendChatMessage(speechToText);
-        triggerVisualToast(`[Voice Recognised]: "${speechToText}"`);
+        hasReceivedResult = true;
+        console.log('[Krishi Voice] speech recognition result:', event);
+        if (voiceSilenceTimerRef.current) {
+          clearTimeout(voiceSilenceTimerRef.current);
+          voiceSilenceTimerRef.current = null;
+        }
+
+        let interim = '';
+        let finalChunk = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const item = event.results[i];
+          if (item.isFinal) {
+            finalChunk += item[0].transcript;
+          } else {
+            interim += item[0].transcript;
+          }
+        }
+
+        if (finalChunk.trim()) {
+          capturedFinalText = (capturedFinalText ? capturedFinalText + ' ' : '') + finalChunk.trim();
+        }
+        if (interim.trim()) {
+          latestInterimText = interim.trim();
+          if (onInterimSpeech) onInterimSpeech(latestInterimText);
+        }
+
+        const recognizedText = (capturedFinalText || latestInterimText).trim();
+        if (recognizedText) {
+          console.log('[Krishi Voice] recognized text:', recognizedText);
+          setChatInput(recognizedText);
+          setRecordedSpeechPrompt(recognizedText);
+          if (finalChunk.trim()) {
+            triggerVisualToast(`🎤 Speech captured: "${finalChunk.trim()}"`);
+          }
+        }
       };
 
       recognition.onerror = (event: any) => {
-        console.error('Speech recognition error', event);
-        fallbackRecordSpeech();
+        const errorCode = event.error || 'unknown';
+        console.log('[Krishi Voice] speech recognition error:', errorCode);
+
+        if (voiceSilenceTimerRef.current) {
+          clearTimeout(voiceSilenceTimerRef.current);
+          voiceSilenceTimerRef.current = null;
+        }
+        setIsRecording(false);
+        if (onListeningStateChange) onListeningStateChange(false);
+
+        if (errorCode === 'aborted') {
+          return;
+        }
+
+        const errMsg = getKrishiVoiceErrorMessage(errorCode, micPermissionStateRef.current);
+        triggerVisualToast(errMsg);
+        if (onError) onError(errMsg);
       };
 
       recognition.onend = () => {
+        console.log('[Krishi Voice] speech recognition ended');
+        if (voiceSilenceTimerRef.current) {
+          clearTimeout(voiceSilenceTimerRef.current);
+          voiceSilenceTimerRef.current = null;
+        }
         setIsRecording(false);
+        speechRecognitionRef.current = null;
+        if (onListeningStateChange) onListeningStateChange(false);
+
+        const textToSubmit = (capturedFinalText || latestInterimText).trim();
+        if (textToSubmit && onSpeechCaptured) {
+          onSpeechCaptured(textToSubmit);
+        }
       };
 
-      try {
-        recognition.start();
-      } catch (err) {
-        console.error(err);
-        fallbackRecordSpeech();
+      console.log('[Krishi Voice] recognition starting:');
+      recognition.start();
+    } catch (err: any) {
+      console.log('[Krishi Voice] speech recognition error:', err?.message || err);
+      setIsRecording(false);
+      if (onListeningStateChange) onListeningStateChange(false);
+      if (voiceSilenceTimerRef.current) {
+        clearTimeout(voiceSilenceTimerRef.current);
+        voiceSilenceTimerRef.current = null;
       }
-    } else {
-      fallbackRecordSpeech();
+      const errMsg = getKrishiVoiceErrorMessage(err?.name || 'error', micPermissionStateRef.current);
+      triggerVisualToast(errMsg);
+      if (onError) onError(errMsg);
     }
   };
-
-  const fallbackRecordSpeech = () => {
-    const localVoiceds: Record<LanguageCode, string> = {
-      en: 'How to defend tomato organic blight crops?',
-      kn: 'ಟೊಮೆಟೊ ಅರ್ಲಿ ಬ್ಲೈಟ್ ರೋಗಕ್ಕೆ ಜೈವಿಕ ಕೀಟನಾಶಕ ಯಾವುದು?',
-      ta: 'தக்காளி இலை அழுகல் நோயை இயற்கை முறையில் தடுப்பது எப்படி?',
-      hi: 'टमाटर की बीमारी को जैविक तरीके से कैसे ठीक करें?',
-      te: 'టమోటా ఆకు मచ్చ తెగులు నివారణకు ఏ మందు వాడాలి?',
-      ml: 'തക്കാളി ചെടികളിലെ കരിംപുള്ളി രോഗം മാറ്റുന്നത് എങ്ങനെ?',
-      bn: 'টমেটো পাতায় কালো ছোপ ছোপ দাগ দূর করার জৈব উপায় কি?',
-      mr: 'टोमॅटोवरील करपा रोगासाठी साध्या सेंद्रिय फवारणी सांगा?',
-      pa: 'ਟਮਾਟਰ ਦੇ ਪੱਤਿਆਂ ਤੇ ਕਾਲੇ ਧੱਬਿਆਂ ਦਾ ਜੈਵਿਕ ਇਲਾਜ ਕੀ ਹੈ?'
-    };
-    setTimeout(() => {
-      const simulatedText = localVoiceds[currentLang] || 'How to grow high quality tomato?';
-      setIsRecording(false);
-      triggerSendChatMessage(simulatedText);
-      triggerVisualToast(`[Voice Recognised]: "${simulatedText}"`);
-    }, 2800);
-  };
-  const DUMMY_STRAY = {
-      kn: 'ಟೊಮೆಟೊ ಅರ್ಲಿ ಬ್ಲೈಟ್ ರೋಗಕ್ಕೆ ಜೈವಿಕ ಕೀಟನಾಶಕ ಯಾವುದು?',
-      ta: 'தக்காளி இலை அழுகல் நோயை இயற்கை முறையில் தடுப்பது எப்படி?',
-      hi: 'टमाटर की बीमारी को जैविक तरीके से कैसे ठीक करें?',
-      te: 'టమోటా ఆకు మచ్చ తెగులు నివారణకు ఏ మందు వాడాలి?',
-      ml: 'തക്കാളി ചെടികളിലെ കരിംപുള്ളി രോഗം മാറ്റുന്നത് എങ്ങനെ?',
-      bn: 'টমেটো পাতায় কালো ছোপ ছোপ দাগ দূর করার জৈব উপায় কি?',
-      mr: 'टोमॅटोवरील करपा रोगासाठी साध्या सेंद्रिय फवारणी सांगा?',
-      pa: 'ਟਮਾਟਰ ਦੇ ਪੱਤਿਆਂ ਤੇ ਕਾਲੇ ਧੱਬਿਆਂ ਦਾ ਜੈਵਿਕ ਇਲਾਜ ਕੀ ਹੈ?'  };
-
 
   // Crop Doctor leaf analyzer API orchestrator
   const analyzeCropDiseaseImage = async (base64String: string) => {
@@ -952,7 +1270,6 @@ export default function App() {
       setUploadProgress(50);
       setUploadProgressStatus('Uploading leaf scan securely...');
 
-      const conditionType = (base64String === 'healthy' || base64String === 'blight' || base64String === 'rust') ? base64String : undefined;
       const userLoc = liveWeather?.locationName || postDistrict || 'Karnataka';
 
       setUploadProgress(75);
@@ -962,7 +1279,7 @@ export default function App() {
         base64String,
         firebaseAuthUid || 'guest_farmer',
         currentLang,
-        conditionType,
+        undefined,
         userLoc
       );
 
@@ -972,52 +1289,23 @@ export default function App() {
       fetchScanHistory();
       speakVoiceOutput(`${result.diseaseName || 'Scan complete'}. ${result.treatmentSuggestions || result.organicControl || ''}`);
       triggerVisualToast('AI Doctor Report generated & saved successfully! 🍃');
-    } catch (e) {
-      console.warn('Diagnosis error:', e);
-      // Diagnostic safe fallback
-      const reportKn = {
-        cropName: 'ಟೊಮೆಟೊ (Tomato)',
-        diseaseName: 'ಅರ್ಲಿ ಬ್ಲೈಟ್ (Tomato Early Blight)',
-        confidence: '90%',
-        severity: 'MEDIUM',
-        symptoms: 'ಕೆಳಗಿನ ಎಲೆಗಳಲ್ಲಿ ಕಪ್ಪು ಕಲೆಗಳು ಉಂಟಾಗಿ ಮೇಲೆ ಹರಡುತ್ತವೆ.',
-        treatmentSuggestions: 'ಸೋಂಕಿತ ಎಲೆಗಳನ್ನು ತಕ್ಷಣ ಕತ್ತರಿಸಿ ಜಮೀನಿನಿಂದ ದೂರ ವಿಲೇವಾರಿ ಮಾಡಿ.',
-        organicControl: 'ಬೇವಿನ ಎಣ್ಣೆ ಕಷಾಯ (೫ml/ಲೀಟರ್) ಸಿಂಪಡಿಸಿ.',
-        chemicalControl: 'ಮ್ಯಾಂಕೋಜೆಬ್ ಶಿಲೀಂಧ್ರನಾಶಕವನ್ನು (೨g/ಲೀಟರ್) ಸಿಂಪಡಿಸಿ.',
-        dosage: '೨ ಗ್ರಾಂ ಪ್ರತಿ ಲೀಟರ್ ನೀರಿಗೆ',
-        preventionTips: 'ಮೇಲಿಂದ ನೀರು ಹಾಯಿಸಬೇಡಿ; ಬುಡಕ್ಕೆ ಮಾತ್ರ ಹಾಯಿಸಿ.',
-        farmerPrecautions: 'ಸಿಂಪಡಿಸುವಾಗ ಮುಖವಾಡ ಮತ್ತು ಕೈಗವಸುಗಳನ್ನು ಧರಿಸಿ.'
-      };
-      const reportHi = {
-        cropName: 'टमाटर (Tomato)',
-        diseaseName: 'अगेती झुलसा (Early Blight)',
-        confidence: '90%',
-        severity: 'MEDIUM',
-        symptoms: 'निचली पत्तियों पर काले छल्ले बनते हैं जो धीरे-धीरे ऊपर फैलते हैं।',
-        treatmentSuggestions: 'संक्रमित पत्तियों को तुरंत हटा दें।',
-        organicControl: 'नीम के तेल का घोल (5ml/लीटर) छिड़कें और मिट्टी में धूप आने दें।',
-        chemicalControl: 'मैंकोजेब कवकनाशी (2 ग्राम/लीटर) पत्तियों पर छिड़कें।',
-        dosage: '2 ग्राम प्रति लीटर पानी',
-        preventionTips: 'जड़ों में सिंचाई करें, पत्तों को सूखा रखें।',
-        farmerPrecautions: 'स्प्रे करते समय मास्क पहनें।'
-      };
-      const reportEn = {
-        cropName: 'Tomato',
-        diseaseName: 'Early Blight (Alternaria Solani)',
-        confidence: '90%',
-        severity: 'MEDIUM',
-        symptoms: 'Concentric brown-black circular lesions first appearing on mature lower leaves.',
-        treatmentSuggestions: 'Prune dead foliage immediately to limit ground humidity spread.',
-        organicControl: 'Spray warm soapy Neem oil formulation (5ml/L). Ensure proper plant spacing.',
-        chemicalControl: 'Foliar application of Mancozeb or Chlorothalonil antifungal powder.',
-        dosage: '2g per liter of clean water',
-        preventionTips: 'Avoid sprinkler overhead irrigation; keep ground moisture dry at night.',
-        farmerPrecautions: 'Wear gloves and eye protection during spray application.'
-      };
-
-      const finalReport = currentLang === 'kn' ? reportKn : currentLang === 'hi' ? reportHi : reportEn;
-      setDiagnosisReport(finalReport);
-      speakVoiceOutput(`${finalReport.diseaseName}. ${finalReport.treatmentSuggestions}`);
+    } catch (e: any) {
+      console.error('Diagnosis error:', e);
+      triggerVisualToast('AI vision diagnosis service is temporarily unavailable. Please try again.');
+      setDiagnosisReport({
+        cropName: 'Diagnosis Unavailable',
+        diseaseName: 'AI service is temporarily unavailable',
+        confidence: 'N/A',
+        severity: 'LOW',
+        symptoms: 'Unable to analyze image at this moment. Please verify internet connection or try again.',
+        treatmentSuggestions: 'For immediate assistance with severe crop symptoms, consult your nearest Krishi Vigyan Kendra (KVK).',
+        organicControl: 'Keep leaves well ventilated and avoid excess moisture until diagnosis.',
+        chemicalControl: 'Do not spray unverified chemical pesticides without local expert guidance.',
+        dosage: 'N/A',
+        preventionTips: 'Inspect leaves regularly and consult local agricultural extension officer.',
+        farmerPrecautions: 'Wear protective gear when handling diseased foliage.',
+        disclaimer: 'Agricultural AI Advisory Notice: Image diagnosis service is temporarily unavailable.'
+      });
     } finally {
       setTimeout(() => {
         setIsDiagnosing(false);
@@ -1044,53 +1332,151 @@ export default function App() {
     analyzeCropDiseaseImage(mockBase64);
   };
 
-  // Native files uploader handler with canvas auto-compression to prevent large payloads & visual decoding timeouts
+  // Native files uploader handler with format validation & canvas auto-compression
   const handleLeafImageUploadChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const img = new Image();
-      const reader = new FileReader();
-      
-      reader.onload = (event) => {
-        img.src = event.target?.result as string;
-      };
+    if (!file) return;
 
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 800;
-        const MAX_HEIGHT = 800;
-        let width = img.width;
-        let height = img.height;
+    // Strict validation of image file types (JPG, JPEG, PNG, WebP)
+    const validMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    const isImageMime = file.type && (validMimes.includes(file.type.toLowerCase()) || file.type.startsWith('image/'));
 
-        if (width > height) {
-          if (width > MAX_WIDTH) {
-            height *= MAX_WIDTH / width;
-            width = MAX_WIDTH;
-          }
-        } else {
-          if (height > MAX_HEIGHT) {
-            width *= MAX_HEIGHT / height;
-            height = MAX_HEIGHT;
-          }
-        }
-
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          const compressedBase64 = canvas.toDataURL('image/jpeg', 0.82);
-          setSelectedLeafImage(compressedBase64);
-          analyzeCropDiseaseImage(compressedBase64);
-        } else {
-          // Fallback if canvas context is not obtainable
-          setSelectedLeafImage(img.src);
-          analyzeCropDiseaseImage(img.src);
-        }
-      };
-
-      reader.readAsDataURL(file);
+    if (!isImageMime) {
+      triggerVisualToast('Please select a valid crop/leaf image.');
+      e.target.value = '';
+      return;
     }
+
+    const img = new Image();
+    const reader = new FileReader();
+
+    reader.onload = (event) => {
+      img.src = event.target?.result as string;
+    };
+
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const MAX_WIDTH = 800;
+      const MAX_HEIGHT = 800;
+      let width = img.width;
+      let height = img.height;
+
+      if (width > height) {
+        if (width > MAX_WIDTH) {
+          height *= MAX_WIDTH / width;
+          width = MAX_WIDTH;
+        }
+      } else {
+        if (height > MAX_HEIGHT) {
+          width *= MAX_HEIGHT / height;
+          height = MAX_HEIGHT;
+        }
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.82);
+        setSelectedLeafImage(compressedBase64);
+      } else {
+        setSelectedLeafImage(img.src);
+      }
+      setDiagnosisReport(null);
+      setActiveTab('assistant');
+      setActiveAiTool('pest');
+      setShowImagePickerModal(false);
+      triggerVisualToast('Leaf photo loaded. Tap "Analyze Photo" for AI diagnosis! 🍃');
+    };
+
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  // Trigger Take Photo: Mobile opens native camera directly, Desktop opens webcam stream
+  const handleTriggerTakePhoto = async () => {
+    setShowImagePickerModal(false);
+    const isMobile = typeof navigator !== 'undefined' && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    if (isMobile) {
+      cameraFileInputRef.current?.click();
+      return;
+    }
+
+    // On desktop, attempt live webcam feed via getUserMedia
+    if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
+        });
+        webcamStreamRef.current = stream;
+        setShowWebcamModal(true);
+        setTimeout(() => {
+          if (webcamVideoRef.current) {
+            webcamVideoRef.current.srcObject = stream;
+            webcamVideoRef.current.play().catch(() => {});
+          }
+        }, 150);
+        return;
+      } catch (err: any) {
+        console.warn('Desktop webcam access not available or denied:', err);
+        triggerVisualToast('Camera access unavailable. Opening file picker instead.');
+        hiddenFileInputRef.current?.click();
+        return;
+      }
+    }
+
+    // Fallback if getUserMedia not supported
+    hiddenFileInputRef.current?.click();
+  };
+
+  const handleCaptureWebcamFrame = () => {
+    if (!webcamVideoRef.current) return;
+    const video = webcamVideoRef.current;
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
+
+    const canvas = document.createElement('canvas');
+    const MAX_WIDTH = 800;
+    const MAX_HEIGHT = 800;
+    let targetWidth = width;
+    let targetHeight = height;
+
+    if (targetWidth > targetHeight) {
+      if (targetWidth > MAX_WIDTH) {
+        targetHeight *= MAX_WIDTH / targetWidth;
+        targetWidth = MAX_WIDTH;
+      }
+    } else {
+      if (targetHeight > MAX_HEIGHT) {
+        targetWidth *= MAX_HEIGHT / targetHeight;
+        targetHeight = MAX_HEIGHT;
+      }
+    }
+
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+      setSelectedLeafImage(dataUrl);
+      setDiagnosisReport(null);
+      setActiveTab('assistant');
+      setActiveAiTool('pest');
+      triggerVisualToast('Leaf photo captured! Tap "Analyze Photo" to begin.');
+    }
+    handleCloseWebcam();
+  };
+
+  const handleCloseWebcam = () => {
+    if (webcamStreamRef.current) {
+      webcamStreamRef.current.getTracks().forEach((track) => track.stop());
+      webcamStreamRef.current = null;
+    }
+    setShowWebcamModal(false);
   };
 
   // Sowing Prediction advisor call
@@ -1125,7 +1511,7 @@ export default function App() {
         'Paddy (Basmati Medium)': { expectedDemand: 'HIGH', profitPotential: 'HIGH', climateRisk: 'LOW', advisoryText: 'Strong export opportunities. Conserve water logs using the drip irrigation module.' },
         'Cotton (Long Staple)': { expectedDemand: 'LOW', profitPotential: 'MEDIUM', climateRisk: 'HIGH', advisoryText: 'Moderate global surplus. Crop alternation to groundnut is suggested today.' }
       };
-      
+
       const localCropPredict = predictionTable[crop.name] || {
         expectedDemand: 'MEDIUM', profitPotential: 'MEDIUM', climateRisk: 'MEDIUM', advisoryText: 'Stable local mandi indexes. Sowing with adequate organic soil mix ensures steady output.'
       };
@@ -1458,8 +1844,8 @@ export default function App() {
             setVoicePostBase64(base64Data);
             setVoicePostCaption(
               currentLang === 'kn' ? 'ಗಾಳಿ ಮತ್ತು ಮಳೆ ಮುನ್ನೆಚ್ಚರಿಕೆ: ಕೊಪ್ಪಳ ಜಿಲ್ಲೆಯಲ್ಲಿ ಬಾಳೆ ಬೆಳೆಗಳನ್ನು ರಕ್ಷಿಸಿ.' :
-              currentLang === 'hi' ? 'फसल रक्षक सुझाव: समय पर जैविक कीटनाशक छिड़काव कर पत्ती मरोड़ रोग रोकें।' :
-              'Crop advisor update: Sowing scheduled on early wet seasons improves direct soil yield.'
+                currentLang === 'hi' ? 'फसल रक्षक सुझाव: समय पर जैविक कीटनाशक छिड़काव कर पत्ती मरोड़ रोग रोकें।' :
+                  'Crop advisor update: Sowing scheduled on early wet seasons improves direct soil yield.'
             );
             triggerVisualToast('Sound message recorded successfully! 🎙️');
           };
@@ -1488,8 +1874,8 @@ export default function App() {
       setVoicePostBase64(simulatedAudioBase64);
       setVoicePostCaption(
         currentLang === 'kn' ? '🎙️ ಧ್ವನಿ ರೆಕಾರ್ಡ್: ಈ ಹಂಗಾಮಿನಲ್ಲಿ ಜೀವಾಮೃತ ಉಪಯೋಗಿಸಿ ಮಣ್ಣಿನ ಗುಣ ನಿಯಂತ್ರಿಸಿ.' :
-        currentLang === 'hi' ? '🎙️ वॉयस पोस्ट: फसल चक्र बदलें और धान के बाद चना उगाने से नाइट्रोजन की कमी दूर करें।' :
-        '🎙️ Farmer Voice Message: Drip watering logs show optimized efficiency. Weather and crop prices are premium.'
+          currentLang === 'hi' ? '🎙️ वॉयस पोस्ट: फसल चक्र बदलें और धान के बाद चना उगाने से नाइट्रोजन की कमी दूर करें।' :
+            '🎙️ Farmer Voice Message: Drip watering logs show optimized efficiency. Weather and crop prices are premium.'
       );
       triggerVisualToast('Voice recording completed! High accuracy caption transcribed.');
     }
@@ -1576,13 +1962,16 @@ export default function App() {
     const val = parseFloat(newExpenseAmount);
     if (isNaN(val)) return;
 
+    const activeUid = firebaseAuthUid || localStorage.getItem('agri_user_uid') || 'guest';
+
     try {
       const response = await fetch('/api/budget', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'x-user-id': activeUid
         },
-        body: JSON.stringify({ name: newExpenseName, amount: val })
+        body: JSON.stringify({ name: newExpenseName, amount: val, userId: activeUid })
       });
       if (response.ok) {
         const newItem = await response.json();
@@ -1594,7 +1983,8 @@ export default function App() {
         const localItem = {
           id: `exp_${Date.now()}`,
           name: newExpenseName,
-          amount: val
+          amount: val,
+          userId: activeUid
         };
         setExpenses(prev => [...prev, localItem]);
         setNewExpenseName('');
@@ -1605,7 +1995,8 @@ export default function App() {
       const localItem = {
         id: `exp_${Date.now()}`,
         name: newExpenseName,
-        amount: val
+        amount: val,
+        userId: activeUid
       };
       setExpenses(prev => [...prev, localItem]);
       setNewExpenseName('');
@@ -1615,9 +2006,13 @@ export default function App() {
   };
 
   const handleDeleteExpenseLocal = async (id: string) => {
+    const activeUid = firebaseAuthUid || localStorage.getItem('agri_user_uid') || 'guest';
     try {
       const response = await fetch(`/api/budget/${id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: {
+          'x-user-id': activeUid
+        }
       });
       if (response.ok) {
         setExpenses(prev => prev.filter(e => e.id !== id));
@@ -1651,7 +2046,7 @@ export default function App() {
 
   return (
     <div id="agri_app_container" className="flex flex-col min-h-screen bg-neutral-900 justify-center items-center p-0 md:p-4 text-slate-800">
-      
+
       {/* Visual System alert notification top bar */}
       {systemAlertMessage && (
         <div id="system_toast_msg" className="fixed top-4 z-50 max-w-sm w-11/12 bg-emerald-600 border border-emerald-500 shadow-xl rounded-xl p-3 text-white flex items-center space-x-3 text-sm animate-bounce">
@@ -1667,17 +2062,30 @@ export default function App() {
       <div id="phone_mockup_shell" className="relative w-full max-w-[480px] h-[100dvh] max-h-[100dvh] md:h-[840px] md:max-h-[880px] md:my-auto md:rounded-[32px] md:border-[8px] md:border-neutral-800 bg-white shadow-2xl flex flex-col overflow-hidden pt-safe pb-safe">
         {/* Permanent reCAPTCHA container element to prevent DOM lifecycle unmount errors */}
         <div id="recaptcha-container" className="hidden"></div>
-        
+
         {/* Smartphone top bezel status indicator info bar */}
         <div id="phone_screen_header" className="bg-emerald-800 text-emerald-100 px-4 pt-[max(8px,env(safe-area-inset-top))] pb-2 text-[11px] font-mono flex justify-between items-center select-none rounded-t-none md:rounded-t-[32px] shrink-0 z-30">
           <div className="flex items-center space-x-1">
             <span className="font-bold tracking-wider">AGRIVERSE CELL</span>
-            <span className="inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+            <span className={`inline-block w-2 h-2 rounded-full ${isOnline ? 'bg-green-400 animate-pulse' : 'bg-amber-400'}`}></span>
           </div>
           <div className="flex items-center space-x-2">
-            <span className="font-bold text-yellow-300 font-mono">2026-06-05 UTC</span>
+            <span className={`font-bold font-mono ${isOnline ? 'text-yellow-300' : 'text-amber-300'}`}>
+              {isOnline ? 'LIVE CONNECTED' : 'OFFLINE (CACHED)'}
+            </span>
           </div>
         </div>
+
+        {/* Offline local data notification banner */}
+        {!isOnline && (
+          <div id="offline_notice_strip" className="bg-amber-500 text-amber-950 px-4 py-1 text-[10px] font-bold flex items-center justify-between z-30 select-none">
+            <span className="flex items-center space-x-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-950 animate-ping"></span>
+              <span>Showing verified cached local intelligence</span>
+            </span>
+            <span className="text-[9px] uppercase font-mono tracking-wider">₹0 Free Tier</span>
+          </div>
+        )}
 
         {/* Application Title Header Bar */}
         <div id="agri_master_navbar" className="bg-gradient-to-r from-emerald-800 to-emerald-700 text-white px-4 py-2.5 shrink-0 shadow-md flex items-center justify-between z-30 sticky top-0">
@@ -1764,248 +2172,248 @@ export default function App() {
                   <p className="text-xs text-slate-500 mt-1.5 px-4">{t.common.otpSubtitle}</p>
                 </div>
 
-            <div id="otp_auth_card_wrapper" className="bg-white rounded-3xl shadow-xl shadow-slate-100 p-6 border border-slate-100">
-              <div id="recaptcha-container"></div>
-              
-              {USE_DEV_OTP && (
-                <div id="dev_mode_banner" className="mb-4 p-3 bg-emerald-50 border-2 border-emerald-200 rounded-2xl flex items-center justify-between text-emerald-900 text-xs font-bold shadow-sm">
-                  <div className="flex items-center space-x-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    <span>Development Mode - SMS OTP Disabled</span>
-                  </div>
-                  <span className="text-[10px] bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded-full uppercase tracking-wider font-extrabold">
-                    Dev Active
-                  </span>
-                </div>
-              )}
+                <div id="otp_auth_card_wrapper" className="bg-white rounded-3xl shadow-xl shadow-slate-100 p-6 border border-slate-100">
+                  <div id="recaptcha-container"></div>
 
-              {authNotice && (
-                <div className="mb-4 p-4 bg-amber-50 border-2 border-amber-200 rounded-2xl text-left space-y-2 text-xs">
-                  <div className="flex items-center justify-between text-amber-900 font-extrabold">
-                    <span className="flex items-center space-x-1.5">
-                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                      <span>{authNotice.title}</span>
-                    </span>
-                    <button 
-                      onClick={() => setAuthNotice(null)} 
-                      className="text-amber-500 hover:text-amber-800 text-[10px] font-bold"
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                  <p className="text-amber-800 leading-relaxed font-medium">{authNotice.desc}</p>
-                  {authNotice.steps && authNotice.steps.length > 0 && (
-                    <ol className="list-decimal list-inside space-y-1 text-amber-900 font-semibold pt-1 border-t border-amber-200/60">
-                      {authNotice.steps.map((st, i) => (
-                        <li key={i}>{st}</li>
-                      ))}
-                    </ol>
+                  {USE_DEV_OTP && (
+                    <div id="dev_mode_banner" className="mb-4 p-3 bg-emerald-50 border-2 border-emerald-200 rounded-2xl flex items-center justify-between text-emerald-900 text-xs font-bold shadow-sm">
+                      <div className="flex items-center space-x-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <span>Development Mode - SMS OTP Disabled</span>
+                      </div>
+                      <span className="text-[10px] bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded-full uppercase tracking-wider font-extrabold">
+                        Dev Active
+                      </span>
+                    </div>
                   )}
-                  <div className="pt-2 flex flex-col space-y-1.5">
-                    <button
-                      onClick={() => {
-                        setUserPhone('9999999999');
-                        triggerVisualToast('Test number prefilled! Note: Ensure +919999999999 is added under Phone Test Numbers in Firebase Console.');
-                      }}
-                      className="w-full py-2 bg-amber-200/80 hover:bg-amber-300 text-amber-950 font-bold rounded-xl text-[11px] transition-colors"
-                    >
-                      Prefill Test Number (+91 9999999999)
-                    </button>
-                  </div>
-                </div>
-              )}
-              {!showOtpScreen ? (
-                <div id="enter_phone_section" className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1 tracking-wide uppercase">
-                      Register Mobile Number
-                    </label>
-                    <div className="relative flex items-center">
-                      <span className="absolute left-4 text-slate-400 font-bold text-sm">+91</span>
-                      <input
-                        type="tel"
-                        maxLength={10}
-                        id="farmer_phone_input"
-                        placeholder={t.common.phonePlaceholder}
-                        disabled={isSendingOtp}
-                        value={userPhone}
-                        onChange={(e) => setUserPhone(e.target.value.replace(/\D/g, ''))}
-                        className="w-full bg-slate-50 border-2 border-slate-100 focus:border-emerald-500 focus:bg-white rounded-xl py-3 pl-14 pr-4 text-sm font-bold tracking-widest outline-none transition-all disabled:opacity-60"
-                      />
-                    </div>
-                  </div>
 
-                  <button
-                    onClick={triggerPhoneVerification}
-                    disabled={isSendingOtp || userPhone.length < 10}
-                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 active:scale-95 text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-emerald-200 flex items-center justify-center space-x-2 disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100"
-                  >
-                    {isSendingOtp ? (
-                      <>
-                        <RotateCcw className="w-4 h-4 animate-spin text-white" />
-                        <span>Sending OTP...</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>{t.common.sendOtp}</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
-
-                  <div className="relative my-3 flex items-center justify-center">
-                    <div className="absolute inset-0 flex items-center">
-                      <div className="w-full border-t border-slate-200" />
-                    </div>
-                    <span className="relative bg-white px-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      Or Sign In With
-                    </span>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleGoogleSignIn}
-                    disabled={isSendingOtp}
-                    className="w-full py-3 px-4 bg-white hover:bg-slate-50 active:scale-95 border-2 border-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all shadow-xs flex items-center justify-center space-x-2.5 disabled:opacity-60 cursor-pointer"
-                  >
-                    <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-                    </svg>
-                    <span>Continue with Google</span>
-                  </button>
-                </div>
-              ) : (
-                <div id="enter_otp_section" className="space-y-4">
-                  {USE_DEV_OTP && devOtpCode && (
-                    <div id="dev_otp_panel" className="p-4 bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-300 rounded-2xl text-center space-y-2 shadow-sm">
-                      <div className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider flex items-center justify-center space-x-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-emerald-600 animate-spin" />
-                        <span>Development Verification Code Panel</span>
+                  {authNotice && (
+                    <div className="mb-4 p-4 bg-amber-50 border-2 border-amber-200 rounded-2xl text-left space-y-2 text-xs">
+                      <div className="flex items-center justify-between text-amber-900 font-extrabold">
+                        <span className="flex items-center space-x-1.5">
+                          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                          <span>{authNotice.title}</span>
+                        </span>
+                        <button
+                          onClick={() => setAuthNotice(null)}
+                          className="text-amber-500 hover:text-amber-800 text-[10px] font-bold"
+                        >
+                          Dismiss
+                        </button>
                       </div>
-                      <div className="text-3xl font-black font-mono tracking-widest text-emerald-950 bg-white border border-emerald-200 py-2 px-4 rounded-xl inline-block shadow-inner select-all">
-                        {devOtpCode}
+                      <p className="text-amber-800 leading-relaxed font-medium">{authNotice.desc}</p>
+                      {authNotice.steps && authNotice.steps.length > 0 && (
+                        <ol className="list-decimal list-inside space-y-1 text-amber-900 font-semibold pt-1 border-t border-amber-200/60">
+                          {authNotice.steps.map((st, i) => (
+                            <li key={i}>{st}</li>
+                          ))}
+                        </ol>
+                      )}
+                      <div className="pt-2 flex flex-col space-y-1.5">
+                        <button
+                          onClick={() => {
+                            setUserPhone('9999999999');
+                            triggerVisualToast('Test number prefilled! Note: Ensure +919999999999 is added under Phone Test Numbers in Firebase Console.');
+                          }}
+                          className="w-full py-2 bg-amber-200/80 hover:bg-amber-300 text-amber-950 font-bold rounded-xl text-[11px] transition-colors"
+                        >
+                          Prefill Test Number (+91 9999999999)
+                        </button>
                       </div>
-                      <p className="text-[11px] text-emerald-700 font-medium">
-                        Enter the code above or tap below to auto-fill.
-                      </p>
+                    </div>
+                  )}
+                  {!showOtpScreen ? (
+                    <div id="enter_phone_section" className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1 tracking-wide uppercase">
+                          Register Mobile Number
+                        </label>
+                        <div className="relative flex items-center">
+                          <span className="absolute left-4 text-slate-400 font-bold text-sm">+91</span>
+                          <input
+                            type="tel"
+                            maxLength={10}
+                            id="farmer_phone_input"
+                            placeholder={t.common.phonePlaceholder}
+                            disabled={isSendingOtp}
+                            value={userPhone}
+                            onChange={(e) => setUserPhone(e.target.value.replace(/\D/g, ''))}
+                            className="w-full bg-slate-50 border-2 border-slate-100 focus:border-emerald-500 focus:bg-white rounded-xl py-3 pl-14 pr-4 text-sm font-bold tracking-widest outline-none transition-all disabled:opacity-60"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={triggerPhoneVerification}
+                        disabled={isSendingOtp || userPhone.length < 10}
+                        className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 active:scale-95 text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-emerald-200 flex items-center justify-center space-x-2 disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100"
+                      >
+                        {isSendingOtp ? (
+                          <>
+                            <RotateCcw className="w-4 h-4 animate-spin text-white" />
+                            <span>Sending OTP...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>{t.common.sendOtp}</span>
+                            <ArrowRight className="w-4 h-4" />
+                          </>
+                        )}
+                      </button>
+
+                      <div className="relative my-3 flex items-center justify-center">
+                        <div className="absolute inset-0 flex items-center">
+                          <div className="w-full border-t border-slate-200" />
+                        </div>
+                        <span className="relative bg-white px-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                          Or Sign In With
+                        </span>
+                      </div>
+
                       <button
                         type="button"
-                        onClick={() => setOtpCode(devOtpCode)}
-                        className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold rounded-xl transition-all shadow-sm"
+                        onClick={handleGoogleSignIn}
+                        disabled={isSendingOtp}
+                        className="w-full py-3 px-4 bg-white hover:bg-slate-50 active:scale-95 border-2 border-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all shadow-xs flex items-center justify-center space-x-2.5 disabled:opacity-60 cursor-pointer"
                       >
-                        Auto-fill Verification Code ({devOtpCode})
+                        <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                        </svg>
+                        <span>Continue with Google</span>
                       </button>
+                    </div>
+                  ) : (
+                    <div id="enter_otp_section" className="space-y-4">
+                      {USE_DEV_OTP && devOtpCode && (
+                        <div id="dev_otp_panel" className="p-4 bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-300 rounded-2xl text-center space-y-2 shadow-sm">
+                          <div className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider flex items-center justify-center space-x-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-emerald-600 animate-spin" />
+                            <span>Development Verification Code Panel</span>
+                          </div>
+                          <div className="text-3xl font-black font-mono tracking-widest text-emerald-950 bg-white border border-emerald-200 py-2 px-4 rounded-xl inline-block shadow-inner select-all">
+                            {devOtpCode}
+                          </div>
+                          <p className="text-[11px] text-emerald-700 font-medium">
+                            Enter the code above or tap below to auto-fill.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setOtpCode(devOtpCode)}
+                            className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold rounded-xl transition-all shadow-sm"
+                          >
+                            Auto-fill Verification Code ({devOtpCode})
+                          </button>
+                        </div>
+                      )}
+
+                      <div className="text-center">
+                        <p className="text-xs text-slate-500">
+                          Message sent successfully to <span className="font-bold text-slate-800 font-mono">+91 {userPhone}</span>
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1 tracking-wide uppercase">
+                          6-Digit SMS Code
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={6}
+                          id="otp_code_input"
+                          placeholder={t.common.otpPlaceholder}
+                          disabled={isVerifyingOtp}
+                          value={otpCode}
+                          onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                          className="w-full bg-slate-50 border-2 border-slate-100 focus:border-emerald-500 focus:bg-white rounded-xl py-3 text-center text-lg font-black tracking-widest outline-none transition-all disabled:opacity-60"
+                        />
+                      </div>
+
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => setShowOtpScreen(false)}
+                          disabled={isVerifyingOtp}
+                          className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-600 font-bold text-xs disabled:opacity-60"
+                        >
+                          Change Number
+                        </button>
+                        <button
+                          onClick={confirmOtpVerification}
+                          disabled={isVerifyingOtp || otpCode.length !== 6}
+                          className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center space-x-1 disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          {isVerifyingOtp ? (
+                            <>
+                              <RotateCcw className="w-3.5 h-3.5 animate-spin text-white" />
+                              <span>Verifying...</span>
+                            </>
+                          ) : (
+                            <span>{t.common.verifyOtp}</span>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   )}
 
-                  <div className="text-center">
-                    <p className="text-xs text-slate-500">
-                      Message sent successfully to <span className="font-bold text-slate-800 font-mono">+91 {userPhone}</span>
-                    </p>
+                  <div className="relative my-6 text-center">
+                    <hr className="border-slate-100" />
+                    <span className="absolute bg-white px-3 text-[10px] text-slate-400 font-bold -top-2 left-1/2 -translate-x-1/2 uppercase tracking-widest">
+                      OR
+                    </span>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1 tracking-wide uppercase">
-                      6-Digit SMS Code
-                    </label>
-                    <input
-                      type="text"
-                      maxLength={6}
-                      id="otp_code_input"
-                      placeholder={t.common.otpPlaceholder}
-                      disabled={isVerifyingOtp}
-                      value={otpCode}
-                      onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
-                      className="w-full bg-slate-50 border-2 border-slate-100 focus:border-emerald-500 focus:bg-white rounded-xl py-3 text-center text-lg font-black tracking-widest outline-none transition-all disabled:opacity-60"
-                    />
-                  </div>
+                  <button
+                    onClick={skipLoginAsGuest}
+                    className="w-full py-3 border-2 border-dashed border-slate-200 hover:border-emerald-500 text-slate-600 hover:text-emerald-700 font-bold text-xs rounded-xl transition-all"
+                  >
+                    {t.common.guestLogin}
+                  </button>
+                </div>
 
-                  <div className="flex space-x-2">
-                    <button
-                      onClick={() => setShowOtpScreen(false)}
-                      disabled={isVerifyingOtp}
-                      className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-600 font-bold text-xs disabled:opacity-60"
-                    >
-                      Change Number
-                    </button>
-                    <button
-                      onClick={confirmOtpVerification}
-                      disabled={isVerifyingOtp || otpCode.length !== 6}
-                      className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center space-x-1 disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      {isVerifyingOtp ? (
-                        <>
-                          <RotateCcw className="w-3.5 h-3.5 animate-spin text-white" />
-                          <span>Verifying...</span>
-                        </>
-                      ) : (
-                        <span>{t.common.verifyOtp}</span>
-                      )}
-                    </button>
+                <div className="mt-8 text-center space-y-2">
+                  <p className="text-[10px] text-slate-400">
+                    🔒 Data encrypted securely with your agricultural local mandis.
+                  </p>
+                  <div className="flex justify-center space-x-1.5 text-[10px] font-semibold text-slate-400">
+                    <span>English</span>•<span>ಕನ್ನಡ</span>•<span>ಹಿಿ೦ದೀ</span>•<span>ತಮಿಳು</span>•<span>ತೆಲುಗು</span>•<span>ಮಲಯಾಳಂ</span>
                   </div>
                 </div>
-              )}
-
-              <div className="relative my-6 text-center">
-                <hr className="border-slate-100" />
-                <span className="absolute bg-white px-3 text-[10px] text-slate-400 font-bold -top-2 left-1/2 -translate-x-1/2 uppercase tracking-widest">
-                  OR
-                </span>
               </div>
-
-              <button
-                onClick={skipLoginAsGuest}
-                className="w-full py-3 border-2 border-dashed border-slate-200 hover:border-emerald-500 text-slate-600 hover:text-emerald-700 font-bold text-xs rounded-xl transition-all"
-              >
-                {t.common.guestLogin}
-              </button>
-            </div>
-
-            <div className="mt-8 text-center space-y-2">
-              <p className="text-[10px] text-slate-400">
-                🔒 Data encrypted securely with your agricultural local mandis.
-              </p>
-              <div className="flex justify-center space-x-1.5 text-[10px] font-semibold text-slate-400">
-                <span>English</span>•<span>ಕನ್ನಡ</span>•<span>ಹಿಿ೦ದೀ</span>•<span>ತಮಿಳು</span>•<span>ತೆಲುಗು</span>•<span>ಮಲಯಾಳಂ</span>
-              </div>
-            </div>
+            )}
           </div>
-        )}
-      </div>
-    ) : showEditProfileModal ? (
-      /* Requirement 1, 2, 4, 5: Full-Page Edit Farmer Profile Route inside Mobile Phone Frame */
-      <div className="w-full h-full flex-1 flex flex-col overflow-hidden bg-slate-50 animate-fadeIn relative">
-        <FarmerProfileForm
-          uid={firebaseAuthUid || auth.currentUser?.uid || localStorage.getItem('agri_user_uid') || 'guest_uid'}
-          mobileNumber={userPhone || regPhone || localStorage.getItem('agri_phone') || '9999999999'}
-          initialProfile={fullUserProfile}
-          currentLang={currentLang}
-          isModal={false}
-          onCancel={() => setShowEditProfileModal(false)}
-          onSaveSuccess={(updated) => {
-            setFullUserProfile(updated);
-            if (updated.name) {
-              setFirebaseAuthName(updated.name);
-              localStorage.setItem('agri_partner_name', updated.name);
-            }
-            setShowEditProfileModal(false);
-            triggerVisualToast('Farmer Profile saved & updated in Firestore database!');
-          }}
-        />
-      </div>
-    ) : (
-      /* Main Application Views Wrapper Container */
-      <div 
-        id="agri_main_application" 
-        className="flex-1 min-h-0 w-full overflow-y-auto overscroll-contain bg-slate-50 relative scrollbar-thin flex flex-col"
-        style={{ WebkitOverflowScrolling: 'touch' }}
-      >
-            
+        ) : showEditProfileModal ? (
+          /* Requirement 1, 2, 4, 5: Full-Page Edit Farmer Profile Route inside Mobile Phone Frame */
+          <div className="w-full h-full flex-1 flex flex-col overflow-hidden bg-slate-50 animate-fadeIn relative">
+            <FarmerProfileForm
+              uid={firebaseAuthUid || auth.currentUser?.uid || localStorage.getItem('agri_user_uid') || 'guest_uid'}
+              mobileNumber={userPhone || regPhone || localStorage.getItem('agri_phone') || '9999999999'}
+              initialProfile={fullUserProfile}
+              currentLang={currentLang}
+              isModal={false}
+              onCancel={() => setShowEditProfileModal(false)}
+              onSaveSuccess={(updated) => {
+                setFullUserProfile(updated);
+                if (updated.name) {
+                  setFirebaseAuthName(updated.name);
+                  localStorage.setItem('agri_partner_name', updated.name);
+                }
+                setShowEditProfileModal(false);
+                triggerVisualToast('Farmer Profile saved & updated in Firestore database!');
+              }}
+            />
+          </div>
+        ) : (
+          /* Main Application Views Wrapper Container */
+          <div
+            id="agri_main_application"
+            className="flex-1 min-h-0 w-full overflow-y-auto overscroll-contain bg-slate-50 relative scrollbar-thin flex flex-col"
+            style={{ WebkitOverflowScrolling: 'touch' }}
+          >
+
             {showWeatherHub && (
-              <WeatherIntelligence 
+              <WeatherIntelligence
                 currentLang={currentLang}
                 onClose={() => setShowWeatherHub(false)}
                 triggerToast={triggerVisualToast}
@@ -2018,6 +2426,7 @@ export default function App() {
                 currentLang={currentLang}
                 onClose={() => setShowIrrigationHub(false)}
                 triggerToast={triggerVisualToast}
+                uid={firebaseAuthUid}
               />
             )}
 
@@ -2030,14 +2439,6 @@ export default function App() {
               />
             )}
 
-            {showCooperativeHub && (
-              <CooperativeNetwork
-                currentLang={currentLang}
-                onClose={() => setShowCooperativeHub(false)}
-                triggerToast={triggerVisualToast}
-              />
-            )}
-            
             {/* VIEW 1: HOME PANEL */}
             {activeTab === 'home' && (
               <HomeTabView
@@ -2070,7 +2471,7 @@ export default function App() {
                 }}
                 onOpenCropDoctor={() => {
                   setActiveTab('assistant');
-                  setActiveAiTool('doctor');
+                  setActiveAiTool('pest');
                   setDiagnosisReport(null);
                   setSelectedLeafImage(null);
                 }}
@@ -2079,9 +2480,8 @@ export default function App() {
                   triggerVisualToast('Launching Soil & Irrigation Advisor dashboard...');
                 }}
                 onOpenGovSchemes={() => {
-                  setActiveTab('profile');
-                  setActiveProfileTool('schemes');
-                  triggerVisualToast('Matching eligible government schemes...');
+                  setShowGovSchemesModal(true);
+                  triggerVisualToast('Opening Government Schemes Directory...');
                 }}
                 onNavigateTab={(tab) => {
                   setActiveTab(tab);
@@ -2156,6 +2556,7 @@ export default function App() {
               <MarketplaceTabView
                 products={products}
                 setProducts={setProducts}
+                mandiPricesList={mandiPricesList}
                 showSellForm={showSellForm}
                 setShowSellForm={setShowSellForm}
                 newCropName={newCropName}
@@ -2191,6 +2592,9 @@ export default function App() {
                 setActiveAiTool={setActiveAiTool}
                 fullUserProfile={fullUserProfile}
                 chatHistory={chatHistory}
+                clearChatHistory={clearChatHistory}
+                chatAttachedImage={chatAttachedImage}
+                setChatAttachedImage={setChatAttachedImage}
                 chatInput={chatInput}
                 setChatInput={setChatInput}
                 isChatLoading={isChatLoading}
@@ -2210,6 +2614,13 @@ export default function App() {
                 deleteScanHistoryItem={deleteScanHistoryItem}
                 handleDiseaseExamplePick={handleDiseaseExamplePick}
                 downloadCropHealthPdf={downloadCropHealthPdf}
+                onOpenImagePicker={() => {
+                  setActiveTab('assistant');
+                  setActiveAiTool('pest');
+                  setShowImagePickerModal(true);
+                }}
+                analyzeCropDiseaseImage={analyzeCropDiseaseImage}
+                uploadProgressStatus={uploadProgressStatus}
                 expenses={expenses}
                 newExpenseTitle={newExpenseName}
                 setNewExpenseTitle={setNewExpenseName}
@@ -2272,9 +2683,8 @@ export default function App() {
                 setActiveProfileTool('overview');
                 triggerVisualToast('Home Sowing feed re-loaded.');
               }}
-              className={`flex flex-col items-center justify-center flex-1 cursor-pointer py-1.5 focus:outline-none transition-all ${
-                activeTab === 'home' && !activeSubPage ? 'text-emerald-700 font-extrabold scale-105' : 'text-slate-400 font-bold hover:text-slate-600'
-              }`}
+              className={`flex flex-col items-center justify-center flex-1 cursor-pointer py-1.5 focus:outline-none transition-all ${activeTab === 'home' && !activeSubPage ? 'text-emerald-700 font-extrabold scale-105' : 'text-slate-400 font-bold hover:text-slate-600'
+                }`}
             >
               <Home className="w-5.5 h-5.5" />
               <span className="text-[9px] mt-1 tracking-tight truncate max-w-[65px]">{t.tabs.home}</span>
@@ -2289,9 +2699,8 @@ export default function App() {
                 fetchPostsAndProducts();
                 triggerVisualToast('Community Postboard synchronized.');
               }}
-              className={`flex flex-col items-center justify-center flex-1 cursor-pointer py-1.5 focus:outline-none transition-all ${
-                activeTab === 'community' && !activeSubPage ? 'text-emerald-700 font-extrabold scale-105' : 'text-slate-400 font-bold hover:text-slate-600'
-              }`}
+              className={`flex flex-col items-center justify-center flex-1 cursor-pointer py-1.5 focus:outline-none transition-all ${activeTab === 'community' && !activeSubPage ? 'text-emerald-700 font-extrabold scale-105' : 'text-slate-400 font-bold hover:text-slate-600'
+                }`}
             >
               <Users className="w-5.5 h-5.5" />
               <span className="text-[9px] mt-1 tracking-tight truncate max-w-[65px]">{t.tabs.community}</span>
@@ -2306,9 +2715,8 @@ export default function App() {
                 fetchPostsAndProducts();
                 triggerVisualToast('Krishi marketplace updated.');
               }}
-              className={`flex flex-col items-center justify-center flex-1 cursor-pointer py-1.5 focus:outline-none transition-all ${
-                activeTab === 'marketplace' && !activeSubPage ? 'text-emerald-700 font-extrabold scale-105' : 'text-slate-400 font-bold hover:text-slate-600'
-              }`}
+              className={`flex flex-col items-center justify-center flex-1 cursor-pointer py-1.5 focus:outline-none transition-all ${activeTab === 'marketplace' && !activeSubPage ? 'text-emerald-700 font-extrabold scale-105' : 'text-slate-400 font-bold hover:text-slate-600'
+                }`}
             >
               <ShoppingBag className="w-5.5 h-5.5" />
               <span className="text-[9px] mt-1 tracking-tight truncate max-w-[65px]">{t.tabs.marketplace}</span>
@@ -2322,9 +2730,8 @@ export default function App() {
                 setSelectedLeafImage(null);
                 triggerVisualToast('Chat Advisor online with voice controls.');
               }}
-              className={`flex flex-col items-center justify-center flex-1 cursor-pointer py-1.5 focus:outline-none transition-all ${
-                activeTab === 'assistant' && !activeSubPage ? 'text-emerald-700 font-extrabold scale-105' : 'text-slate-400 font-bold hover:text-slate-600'
-              }`}
+              className={`flex flex-col items-center justify-center flex-1 cursor-pointer py-1.5 focus:outline-none transition-all ${activeTab === 'assistant' && !activeSubPage ? 'text-emerald-700 font-extrabold scale-105' : 'text-slate-400 font-bold hover:text-slate-600'
+                }`}
             >
               <div className="relative">
                 <MessageSquare className="w-5.5 h-5.5 text-center block" />
@@ -2341,9 +2748,8 @@ export default function App() {
                 setActiveProfileTool('overview');
                 triggerVisualToast('Account ledger open.');
               }}
-              className={`flex flex-col items-center justify-center flex-1 cursor-pointer py-1.5 focus:outline-none transition-all ${
-                activeTab === 'profile' && !activeSubPage ? 'text-emerald-700 font-extrabold scale-105' : 'text-slate-400 font-bold hover:text-slate-600'
-              }`}
+              className={`flex flex-col items-center justify-center flex-1 cursor-pointer py-1.5 focus:outline-none transition-all ${activeTab === 'profile' && !activeSubPage ? 'text-emerald-700 font-extrabold scale-105' : 'text-slate-400 font-bold hover:text-slate-600'
+                }`}
             >
               <User className="w-5.5 h-5.5" />
               <span className="text-[9px] mt-1 tracking-tight truncate max-w-[65px]">{t.tabs.profile}</span>
@@ -2351,20 +2757,33 @@ export default function App() {
           </div>
         )}
 
+        {/* Hidden File & Camera Inputs for Crop Leaf Scanner */}
+        <input
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/jpg"
+          ref={hiddenFileInputRef}
+          className="hidden"
+          onChange={handleLeafImageUploadChange}
+        />
+        <input
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/jpg"
+          capture="environment"
+          ref={cameraFileInputRef}
+          className="hidden"
+          onChange={handleLeafImageUploadChange}
+        />
+
         {/* Floating Camera Upload Button overlaying the interface on active states */}
         {isJoined && (
           <button
             onClick={() => {
-              // Reset assistant to leaf doctor first
               setActiveTab('assistant');
-              setAssistantMode('doctor');
-              setDiagnosisReport(null);
-              // Trigger click on hidden leaf uploader input
-              hiddenFileInputRef.current?.click();
-              triggerVisualToast('Opening camera shutter. Capture your crop leaves clearly!');
+              setActiveAiTool('pest');
+              setShowImagePickerModal(true);
             }}
             id="floating_camera_scanner_fab"
-            className="absolute bottom-20 right-5 w-14 h-14 bg-gradient-to-tr from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 active:scale-95 text-white rounded-full flex items-center justify-center shadow-xl shadow-emerald-600/30 border border-emerald-400 cursor-pointer z-50 transition-all group"
+            className="absolute bottom-20 right-5 w-14 h-14 bg-gradient-to-tr from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 active:scale-95 text-white rounded-full flex items-center justify-center shadow-xl shadow-emerald-600/30 border border-emerald-400 cursor-pointer z-40 transition-all group"
             title="Scan crop disease"
           >
             <Camera className="w-6 h-6 group-hover:rotate-12 transition-transform duration-300" />
@@ -2372,6 +2791,150 @@ export default function App() {
               Diagnose Crop Disease
             </span>
           </button>
+        )}
+
+        {/* Camera / Gallery Selection Bottom Sheet Modal - Sits cleanly above bottom navigation */}
+        {showImagePickerModal && (
+          <div
+            id="crop_image_picker_backdrop"
+            className="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-xs flex flex-col justify-end sm:justify-center items-center p-3 animate-fadeIn pb-20 sm:pb-3"
+            onClick={() => setShowImagePickerModal(false)}
+          >
+            <div
+              id="crop_image_picker_sheet"
+              className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl border border-slate-100 space-y-4 animate-slideUp sm:animate-scaleUp relative"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center space-x-2">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                    <Camera className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-sm text-slate-800">Select Image Source</h3>
+                    <p className="text-[10px] text-slate-500 font-medium">Crop Doctor Disease Scanner</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowImagePickerModal(false)}
+                  className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Selection Options */}
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  id="crop_picker_take_photo_btn"
+                  onClick={handleTriggerTakePhoto}
+                  className="w-full flex items-center space-x-3.5 p-3.5 rounded-2xl bg-emerald-50/70 hover:bg-emerald-100/70 border border-emerald-200/80 text-left cursor-pointer transition-all active:scale-[0.98] group"
+                >
+                  <div className="w-11 h-11 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-md shadow-emerald-600/20 group-hover:scale-105 transition-transform">
+                    <Camera className="w-5 h-5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="font-extrabold text-xs text-emerald-950 block">Take Photo</span>
+                    <span className="text-[10px] text-emerald-700/80 font-medium block truncate">
+                      Use camera to capture infected leaf
+                    </span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  id="crop_picker_choose_gallery_btn"
+                  onClick={() => {
+                    setShowImagePickerModal(false);
+                    hiddenFileInputRef.current?.click();
+                  }}
+                  className="w-full flex items-center space-x-3.5 p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-left cursor-pointer transition-all active:scale-[0.98] group"
+                >
+                  <div className="w-11 h-11 rounded-xl bg-slate-800 text-white flex items-center justify-center shadow-md shadow-slate-800/10 group-hover:scale-105 transition-transform">
+                    <ImageIcon className="w-5 h-5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="font-extrabold text-xs text-slate-800 block">Choose from Gallery</span>
+                    <span className="text-[10px] text-slate-500 font-medium block truncate">
+                      Pick existing photo from storage
+                    </span>
+                  </div>
+                </button>
+              </div>
+
+              {/* Cancel Button */}
+              <button
+                type="button"
+                id="crop_picker_cancel_btn"
+                onClick={() => setShowImagePickerModal(false)}
+                className="w-full py-2.5 rounded-xl text-center text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-50 cursor-pointer transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Real Desktop Webcam Capture Modal */}
+        {showWebcamModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-3 animate-fadeIn pb-20 sm:pb-3">
+            <div className="bg-slate-900 w-full max-w-md rounded-3xl overflow-hidden shadow-2xl border border-slate-700 flex flex-col relative text-white">
+              {/* Header */}
+              <div className="p-3.5 border-b border-slate-800 flex justify-between items-center">
+                <div className="flex items-center space-x-2">
+                  <Camera className="w-5 h-5 text-emerald-400" />
+                  <h4 className="font-extrabold text-xs uppercase tracking-wide text-white">Capture Leaf Photo</h4>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseWebcam}
+                  className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Live Video View */}
+              <div className="relative w-full bg-black aspect-4/3 flex items-center justify-center overflow-hidden">
+                <video
+                  ref={webcamVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-6 border-2 border-dashed border-emerald-400/60 rounded-2xl pointer-events-none flex items-center justify-center">
+                  <span className="text-[10px] font-bold text-emerald-300 bg-slate-950/70 px-2.5 py-1 rounded-full uppercase tracking-wider">
+                    Place crop leaf inside frame
+                  </span>
+                </div>
+              </div>
+
+              {/* Capture Controls */}
+              <div className="p-4 bg-slate-900 flex items-center justify-between gap-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={handleCloseWebcam}
+                  className="flex-1 py-3 px-4 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs cursor-pointer text-center"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  id="webcam_capture_btn"
+                  onClick={handleCaptureWebcamFrame}
+                  className="flex-2 py-3 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 text-white font-extrabold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 cursor-pointer shadow-lg shadow-emerald-600/30 active:scale-95 transition-all"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>Capture Photo</span>
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Edit Farmer Profile Modal */}
@@ -2419,6 +2982,18 @@ export default function App() {
           </div>
         )}
 
+        {/* Genuine Government Schemes Directory Modal */}
+        {showGovSchemesModal && (
+          <GovernmentSchemesModal
+            onClose={() => setShowGovSchemesModal(false)}
+            onOpenKyc={() => {
+              setShowGovSchemesModal(false);
+              setShowKycModal(true);
+            }}
+            currentLang={currentLang}
+            triggerToast={(msg) => triggerVisualToast(msg)}
+          />
+        )}
 
       </div>
 

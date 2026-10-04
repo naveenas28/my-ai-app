@@ -1,0 +1,32 @@
+{
+  "short_name": "AgriVerse",
+  "name": "AgriVerse AI - Smart Farmer Companion",
+  "description": "Comprehensive agricultural advisory, crop disease diagnosis, real-time APMC mandi prices, hyper-local weather alerts, and direct marketplace trade.",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-192.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.svg",
+      "type": "image/svg+xml",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#022c22",
+  "theme_color": "#065f46",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "categories": ["agriculture", "business", "productivity", "utilities"],
+  "lang": "en"
+}

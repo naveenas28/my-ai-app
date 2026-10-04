@@ -17,7 +17,9 @@ import {
   ArrowLeft,
   Check,
   Save,
-  Loader2
+  Loader2,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { UserProfileDoc, saveFarmerProfile } from '../services/userService';
 import { useI18n } from '../context/I18nContext';
@@ -80,6 +82,8 @@ export const KYCGovernmentBenefits: React.FC<KYCGovernmentBenefitsProps> = ({
   // UI States
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [showAadhaar, setShowAadhaar] = useState<boolean>(false);
+  const [showAccount, setShowAccount] = useState<boolean>(false);
 
   useEffect(() => {
     if (initialProfile) {
@@ -233,14 +237,22 @@ export const KYCGovernmentBenefits: React.FC<KYCGovernmentBenefitsProps> = ({
             </label>
             <div className="relative">
               <input
-                type="text"
+                type={showAadhaar ? "text" : "password"}
                 maxLength={12}
                 placeholder="e.g. 5489 1234 8901"
                 value={aadhaarNumber}
                 onChange={(e) => setAadhaarNumber(e.target.value.replace(/\D/g, ''))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 pl-10 pr-4 text-xs font-mono font-extrabold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 pl-10 pr-10 text-xs font-mono font-extrabold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
               />
               <FileText className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+              <button
+                type="button"
+                onClick={() => setShowAadhaar(!showAadhaar)}
+                className="absolute right-3.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer p-1"
+                title={showAadhaar ? "Hide Aadhaar" : "Show Aadhaar"}
+              >
+                {showAadhaar ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
             </div>
             <p className="text-[10px] text-slate-400 font-semibold mt-1">
               🔒 Encrypted directly under UID. Required for PM-KISAN & State Subsidy payouts.
@@ -274,13 +286,23 @@ export const KYCGovernmentBenefits: React.FC<KYCGovernmentBenefitsProps> = ({
 
             <div>
               <label className="block text-xs font-extrabold text-slate-700 mb-1">Account Number</label>
-              <input
-                type="text"
-                placeholder="e.g. 30281948210"
-                value={bankAccountNo}
-                onChange={(e) => setBankAccountNo(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
-              />
+              <div className="relative">
+                <input
+                  type={showAccount ? "text" : "password"}
+                  placeholder="e.g. 30281948210"
+                  value={bankAccountNo}
+                  onChange={(e) => setBankAccountNo(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3.5 pr-10 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAccount(!showAccount)}
+                  className="absolute right-3.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer p-1"
+                  title={showAccount ? "Hide Account Number" : "Show Account Number"}
+                >
+                  {showAccount ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
 
             <div>

@@ -1,19 +1,7 @@
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { LiveWeatherData, LocationCoords } from '../types/weather';
-import { fetchLiveWeather } from './weatherService';
-
-const LOCAL_CACHE_KEY = 'agri_live_weather_cache';
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes TTL for weather cache
-
-let memoryCache: { data: LiveWeatherData; timestamp: number; key: string } | null = null;
-
-/**
- * Get cache key for coordinates
- */
-function getCoordKey(lat: number, lon: number): string {
-  return `${lat.toFixed(2)}_${lon.toFixed(2)}`;
-}
+import { freeWeatherProvider } from './providers/weatherProvider';
 
 /**
  * Save user's preferred weather location in Firebase Firestore
@@ -70,7 +58,9 @@ export async function getUserWeatherLocationFromFirestore(
 }
 
 /**
- * High-level repository method to fetch weather with 15-min cache, offline fallback, and Firestore location integration
+ * High-level repository method to fetch weather
+ * Directly routes through authoritative FreeWeatherProvider (Open-Meteo)
+ * with 10-minute cache, force-refresh bypass, transparent status, and safe fallback.
  */
 export async function getWeatherForLocation(
   lat: number,
@@ -78,50 +68,7 @@ export async function getWeatherForLocation(
   customName?: string,
   forceRefresh: boolean = false
 ): Promise<LiveWeatherData> {
-  const coordKey = getCoordKey(lat, lon);
-  const now = Date.now();
-
-  // 1. Check in-memory cache
-  if (!forceRefresh && memoryCache && memoryCache.key === coordKey && (now - memoryCache.timestamp) < CACHE_TTL_MS) {
-    return memoryCache.data;
-  }
-
-  // 2. Try fetching live API if online
-  if (navigator.onLine) {
-    try {
-      const liveData = await fetchLiveWeather(lat, lon, customName);
-      
-      // Update in-memory cache
-      memoryCache = {
-        data: liveData,
-        timestamp: now,
-        key: coordKey
-      };
-
-      // Update localStorage cache
-      localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(liveData));
-
-      return liveData;
-    } catch (err) {
-      console.warn('Network fetch failed in WeatherRepository, checking local offline cache...', err);
-    }
-  }
-
-  // 3. Fallback to LocalStorage cache
-  const offlineRaw = localStorage.getItem(LOCAL_CACHE_KEY);
-  if (offlineRaw) {
-    try {
-      const parsed: LiveWeatherData = JSON.parse(offlineRaw);
-      parsed.isOfflineData = true;
-      return parsed;
-    } catch (e) {
-      console.warn('Error parsing offline weather cache:', e);
-    }
-  }
-
-  // 4. If no cache exists, attempt live fetch regardless
-  const fallbackLiveData = await fetchLiveWeather(lat, lon, customName);
-  return fallbackLiveData;
+  return await freeWeatherProvider.getLiveWeatherData(lat, lon, customName, forceRefresh);
 }
 
 /**

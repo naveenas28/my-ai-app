@@ -41,6 +41,8 @@ export interface DailyForecastItem {
 export type AlertType = 'rain' | 'heat' | 'frost' | 'wind' | 'thunderstorm' | 'flood' | 'drought';
 export type AlertSeverity = 'critical' | 'warning' | 'info';
 
+export type WeatherDataSourceStatus = 'REAL DATA' | 'CACHED DATA' | 'OFFLINE FALLBACK';
+
 export interface SevereWeatherAlert {
   id: string;
   type: AlertType;
@@ -49,6 +51,19 @@ export interface SevereWeatherAlert {
   description: string;
   recommendedAction: string;
   timestamp: string;
+  isAgriVerseAdvisory?: boolean;
+  source?: string;
+  statusLabel?: WeatherDataSourceStatus;
+  ruleInputs?: {
+    rainProbability?: number;
+    precipitationMm?: number;
+    humidity?: number;
+    temperature?: number;
+    windSpeed?: number;
+    weatherCode?: number;
+    locationName?: string;
+    thresholdReason?: string;
+  };
 }
 
 export interface FarmingRecommendation {
@@ -67,7 +82,9 @@ export interface LiveWeatherData {
   condition: string;
   weatherCode: number;
   humidity: number;
-  rainfallChance: number;
+  rainfallChance: number; // Current/next-hour rain probability
+  currentHourlyRainProb: number; // Current/next-hour rain probability
+  dailyMaxRainProb: number; // 24h daily maximum rain probability
   precipitationMm: number;
   windSpeed: number;
   windDirection: number; // in degrees 0-360
@@ -82,6 +99,8 @@ export interface LiveWeatherData {
   alerts: SevereWeatherAlert[];
   recommendations: FarmingRecommendation[];
   lastUpdated: string; // ISO string
+  dataSourceStatus: WeatherDataSourceStatus;
+  cachedAt?: number; // timestamp in ms when cache entry was stored
   isOfflineData?: boolean;
 }
 

@@ -7,6 +7,7 @@ import {
   FarmingRecommendation,
   getWMOWeatherInfo
 } from '../types/weather';
+import { freeWeatherProvider, generateAgriVerseAdvisories } from './providers/weatherProvider';
 
 // Re-export legacy WeatherData interface if other components expect it for backward compatibility
 export interface LegacyDailyForecast {
@@ -480,6 +481,7 @@ export async function reverseGeocode(lat: number, lon: number): Promise<string> 
 
 /**
  * Generate severe weather alerts dynamically based on live meteorological data
+ * Strict rule: All alerts are deterministic AgriVerse Agricultural Advisories, not official warnings.
  */
 export function generateSevereWeatherAlerts(
   temp: number,
@@ -488,103 +490,19 @@ export function generateSevereWeatherAlerts(
   precipitationMm: number,
   windSpeed: number,
   weatherCode: number,
-  locationName: string
+  locationName: string,
+  isOfflineFallback: boolean = false
 ): SevereWeatherAlert[] {
-  const alerts: SevereWeatherAlert[] = [];
-  const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-  // 1. Heavy Rainfall Alert
-  if (rainProb >= 65 || precipitationMm >= 10 || (weatherCode >= 63 && weatherCode <= 67)) {
-    alerts.push({
-      id: `alert_rain_${Date.now()}`,
-      type: 'rain',
-      severity: precipitationMm > 25 || rainProb > 80 ? 'critical' : 'warning',
-      title: '⚠️ Severe Heavy Downpour Alert',
-      description: `High rainfall probability of ${rainProb}% detected for ${locationName}. Total estimated precipitation: ${precipitationMm.toFixed(1)}mm.`,
-      recommendedAction: 'Cover harvested grain piles immediately with tarpaulins and clear drainage channels around standing crops.',
-      timestamp: nowStr
-    });
-  }
-
-  // 2. Thunderstorm Alert
-  if (weatherCode >= 95 && weatherCode <= 99) {
-    alerts.push({
-      id: `alert_thunder_${Date.now()}`,
-      type: 'thunderstorm',
-      severity: 'critical',
-      title: '⚡ Severe Thunderstorm & Lightning Warning',
-      description: 'Active atmospheric electrical instability detected with thunderstorm hazards.',
-      recommendedAction: 'Instruct farm laborers to stay away from tall isolated trees, metallic electric poles, and open fields.',
-      timestamp: nowStr
-    });
-  }
-
-  // 3. High Wind Alert
-  if (windSpeed >= 25) {
-    alerts.push({
-      id: `alert_wind_${Date.now()}`,
-      type: 'wind',
-      severity: windSpeed > 40 ? 'critical' : 'warning',
-      title: '💨 Strong Gale Wind Alert',
-      description: `Wind speed peaking at ${windSpeed} km/h. High risk of mechanical damage to banana, papaya, and young saplings.`,
-      recommendedAction: 'Provide bamboo staking support to tall plants and tie polyhouse shade nets securely.',
-      timestamp: nowStr
-    });
-  }
-
-  // 4. Heatwave Alert
-  if (temp >= 35) {
-    alerts.push({
-      id: `alert_heat_${Date.now()}`,
-      type: 'heat',
-      severity: temp >= 38 ? 'critical' : 'warning',
-      title: '🌡️ Extreme Heat Wave Hazard',
-      description: `Ambient temperature reached ${temp}°C. Rapid soil moisture evaporation occurring.`,
-      recommendedAction: 'Perform light micro-drip irrigation during evening hours and provide shaded water troughs for livestock.',
-      timestamp: nowStr
-    });
-  }
-
-  // 5. Frost Alert
-  if (temp <= 10) {
-    alerts.push({
-      id: `alert_frost_${Date.now()}`,
-      type: 'frost',
-      severity: temp <= 5 ? 'critical' : 'warning',
-      title: '❄️ Cold Wave & Frost Hazard',
-      description: `Low temperatures of ${temp}°C detected. Risk of cold injury to tender vegetable blossoms.`,
-      recommendedAction: 'Irrigate fields lightly in late afternoon to raise thermal soil capacity and smoke field borders if frost worsens.',
-      timestamp: nowStr
-    });
-  }
-
-  // 6. Flash Flood Warning
-  if (precipitationMm >= 30 || (rainProb >= 85 && humidity >= 90)) {
-    alerts.push({
-      id: `alert_flood_${Date.now()}`,
-      type: 'flood',
-      severity: 'critical',
-      title: '🌊 Flash Waterlogging & Flood Risk',
-      description: 'Soil saturation levels exceeded threshold. Potential root submergence hazard.',
-      recommendedAction: 'Dig outlet trenches to drain standing water from paddy and vegetable beds to prevent root rot.',
-      timestamp: nowStr
-    });
-  }
-
-  // 7. Drought / Dry Soil Warning
-  if (temp >= 30 && humidity < 40 && rainProb < 20) {
-    alerts.push({
-      id: `alert_drought_${Date.now()}`,
-      type: 'drought',
-      severity: 'warning',
-      title: '🏜️ Micro-Drought Soil Moisture Stress',
-      description: 'Relative humidity dropped below 40% with high temperatures. Critical transpiration loss.',
-      recommendedAction: 'Apply organic mulch or dry straw around crop bases to retain soil moisture.',
-      timestamp: nowStr
-    });
-  }
-
-  return alerts;
+  return generateAgriVerseAdvisories(
+    temp,
+    humidity,
+    rainProb,
+    precipitationMm,
+    windSpeed,
+    weatherCode,
+    locationName,
+    isOfflineFallback
+  );
 }
 
 /**
@@ -697,7 +615,7 @@ export function generateFarmingRecommendations(
 }
 
 /**
- * Main function: Fetch complete live weather data directly from Open-Meteo API
+ * Main function: Fetch complete live weather data directly via FreeWeatherProvider
  */
 export async function fetchLiveWeather(
   lat: number = 13.4355,
@@ -705,158 +623,7 @@ export async function fetchLiveWeather(
   customName?: string
 ): Promise<LiveWeatherData> {
   const resolvedName = customName || await reverseGeocode(lat, lon);
-
-  const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,showers,snowfall,weather_code,cloud_cover,pressure_msl,surface_pressure,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,uv_index,visibility&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_sum,rain_sum,showers_sum,precipitation_probability_max,wind_speed_10m_max&timezone=auto`;
-
-  const res = await fetch(omUrl);
-  if (!res.ok) {
-    throw new Error(`Open-Meteo API returned status ${res.status}`);
-  }
-
-  const data = await res.json();
-  const current = data.current || {};
-  const hourly = data.hourly || {};
-  const daily = data.daily || {};
-
-  const temp = Math.round(current.temperature_2m ?? 28);
-  const feelsLike = Math.round(current.apparent_temperature ?? temp);
-  const humidity = Math.round(current.relative_humidity_2m ?? 80);
-  const weatherCode = current.weather_code ?? 0;
-  const wmoInfo = getWMOWeatherInfo(weatherCode);
-  const condition = wmoInfo.label;
-  const precipitationMm = current.precipitation ?? 0;
-  const windSpeed = Math.round(current.wind_speed_10m ?? 12);
-  const windDirection = Math.round(current.wind_direction_10m ?? 0);
-  const windDirectionText = degreesToCompass(windDirection);
-  const pressure = Math.round(current.pressure_msl ?? current.surface_pressure ?? 1012);
-
-  // Hourly forecast mapping (for next 24 hours)
-  const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const now = new Date();
-  const currentHourISO = now.toISOString().slice(0, 13);
-
-  const hourlyList: HourlyForecastItem[] = [];
-  const times: string[] = hourly.time || [];
-  let startIndex = times.findIndex(t => t.startsWith(currentHourISO));
-  if (startIndex < 0) startIndex = 0;
-
-  for (let i = startIndex; i < Math.min(startIndex + 24, times.length); i++) {
-    const tISO = times[i];
-    const hourTemp = Math.round(hourly.temperature_2m?.[i] ?? temp);
-    const hourFeels = Math.round(hourly.apparent_temperature?.[i] ?? hourTemp);
-    const hourRainProb = Math.round(hourly.precipitation_probability?.[i] ?? 0);
-    const hourPrecip = hourly.precipitation?.[i] ?? 0;
-    const hourCode = hourly.weather_code?.[i] ?? 0;
-    const hourWmo = getWMOWeatherInfo(hourCode);
-    const hourHum = Math.round(hourly.relative_humidity_2m?.[i] ?? humidity);
-    const hourUv = Math.round(hourly.uv_index?.[i] ?? 0);
-
-    hourlyList.push({
-      time: formatTime12h(tISO),
-      temp: hourTemp,
-      feelsLike: hourFeels,
-      rainProb: hourRainProb,
-      precipitationMm: hourPrecip,
-      weatherCode: hourCode,
-      condition: hourWmo.label,
-      humidity: hourHum,
-      windSpeed: windSpeed,
-      uvIndex: hourUv
-    });
-  }
-
-  // Daily forecast mapping (7 days)
-  const dailyList: DailyForecastItem[] = [];
-  const dailyDates: string[] = daily.time || [];
-
-  for (let i = 0; i < Math.min(7, dailyDates.length); i++) {
-    const dateStr = dailyDates[i];
-    const dObj = new Date(dateStr);
-    const dayName = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : daysOfWeek[dObj.getDay()];
-    const dMax = Math.round(daily.temperature_2m_max?.[i] ?? temp);
-    const dMin = Math.round(daily.temperature_2m_min?.[i] ?? temp - 5);
-    const dRainProb = Math.round(daily.precipitation_probability_max?.[i] ?? 0);
-    const dPrecip = daily.precipitation_sum?.[i] ?? 0;
-    const dCode = daily.weather_code?.[i] ?? 0;
-    const dWmo = getWMOWeatherInfo(dCode);
-    const dUvMax = Math.round(daily.uv_index_max?.[i] ?? 5);
-    const dWindMax = Math.round(daily.wind_speed_10m_max?.[i] ?? windSpeed);
-    const dSunrise = formatTime12h(daily.sunrise?.[i]);
-    const dSunset = formatTime12h(daily.sunset?.[i]);
-
-    dailyList.push({
-      date: dateStr,
-      dayName,
-      tempMax: dMax,
-      tempMin: dMin,
-      rainProb: dRainProb,
-      precipitationMm: dPrecip,
-      weatherCode: dCode,
-      condition: dWmo.label,
-      uvIndexMax: dUvMax,
-      windSpeedMax: dWindMax,
-      sunrise: dSunrise,
-      sunset: dSunset
-    });
-  }
-
-  // Calculate current max UV Index and max rainfall chance from hourly/daily
-  const currentRainfallChance = dailyList[0]?.rainProb ?? (hourlyList[0]?.rainProb || 0);
-  const uvIndex = dailyList[0]?.uvIndexMax ?? (hourlyList[0]?.uvIndex || 5);
-  const sunrise = dailyList[0]?.sunrise || '06:15 AM';
-  const sunset = dailyList[0]?.sunset || '06:45 PM';
-
-  // Visibility in Km (from hourly or standard estimation)
-  const rawVisibilityMeters = hourly.visibility?.[startIndex] ?? 10000;
-  const visibilityKm = Math.round((rawVisibilityMeters / 1000) * 10) / 10;
-
-  // Generate severe weather alerts & AI farming recommendations
-  const alerts = generateSevereWeatherAlerts(
-    temp,
-    humidity,
-    currentRainfallChance,
-    precipitationMm,
-    windSpeed,
-    weatherCode,
-    resolvedName
-  );
-
-  const recommendations = generateFarmingRecommendations(
-    temp,
-    humidity,
-    currentRainfallChance,
-    windSpeed,
-    uvIndex,
-    weatherCode
-  );
-
-  return {
-    location: {
-      lat,
-      lon,
-      name: resolvedName
-    },
-    temperature: temp,
-    feelsLike,
-    condition,
-    weatherCode,
-    humidity,
-    rainfallChance: currentRainfallChance,
-    precipitationMm,
-    windSpeed,
-    windDirection,
-    windDirectionText,
-    uvIndex,
-    pressure,
-    sunrise,
-    sunset,
-    visibilityKm,
-    hourlyForecast: hourlyList,
-    dailyForecast: dailyList,
-    alerts,
-    recommendations,
-    lastUpdated: new Date().toISOString()
-  };
+  return await freeWeatherProvider.getLiveWeatherData(lat, lon, resolvedName, false);
 }
 
 /**
@@ -889,7 +656,7 @@ export async function getLiveWeather(
       temperature: live.temperature,
       humidity: live.humidity,
       windSpeed: live.windSpeed,
-      rainfallChance: live.rainfallChance,
+      rainfallChance: live.currentHourlyRainProb ?? live.rainfallChance,
       condition: live.condition,
       weatherCode: live.weatherCode,
       hasSevereRainAlert: hasSevere,
