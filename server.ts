@@ -1,11 +1,11 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import { executeKrishiAgent } from './src/server/krishiAgent';
 import { queryOfficialMandis, getMandiById } from './src/services/providers/mandiDataProvider';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 dotenv.config();
 
@@ -21,18 +21,31 @@ const compactImageUrl = (img: string): string => {
 };
 
 const app = express();
-const isProd = process.env.NODE_ENV === 'production' || process.argv.includes('--production');
-const PORT = 3000;
+const isProd = process.env.NODE_ENV === 'production' || process.argv.includes('--production') || Boolean(process.env.VERCEL);
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Force JSON parsing support for base64 image uploads
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
+// Vercel serverless path normalization middleware:
+// Ensures rewritten /api/index recovers original route from Vercel headers if present
+app.use((req, res, next) => {
+  const forwardedUrl = (req.headers['x-matched-path'] || req.headers['x-forwarded-url'] || req.headers['x-vercel-matched-path']) as string | undefined;
+  if (req.url === '/api/index' || req.url === '/api/index.ts' || req.url === '/api' || req.url === '/api/') {
+    if (forwardedUrl && forwardedUrl.startsWith('/api')) {
+      req.url = forwardedUrl;
+    }
+  }
+  next();
+});
+
 // Healthcheck endpoint
-app.get('/api/health', (req, res) => {
+app.get(['/api/health', '/health'], (req, res) => {
   res.json({
     status: 'ok',
     mode: isProd ? 'production' : 'development',
+    serverless: Boolean(process.env.VERCEL),
     timestamp: new Date().toISOString(),
     geminiKeyConfigured: Boolean(process.env.GEMINI_API_KEY),
     costTier: '₹0 ACTIVE COST (100% Free / Zero Billing)'
@@ -49,8 +62,6 @@ const ai = new GoogleGenAI({
     },
   },
 });
-
-import fs from 'fs';
 
 // Server-side database files + memory cache synced on disk for permanent persistence
 const initialPosts = [
@@ -155,9 +166,29 @@ let serverReports = loadJSON(REPORTS_FILE, []);
 // Live Weather API Grounding
 
 // NEW LIVE WEATHER API ENDPOINT
-app.get('/api/weather', async (req, res) => {
-  const lat = req.query.lat ? parseFloat(req.query.lat as string) : 13.4355;
-  const lon = req.query.lon ? parseFloat(req.query.lon as string) : 77.7279;
+app.get(['/api/weather', '/weather'], async (req, res) => {
+  const latStr = req.query.lat as string | undefined;
+  const lonStr = req.query.lon as string | undefined;
+
+  let lat = 13.4355;
+  let lon = 77.7279;
+
+  if (latStr !== undefined) {
+    const parsedLat = parseFloat(latStr);
+    if (isNaN(parsedLat)) {
+      return res.status(400).json({ success: false, error: 'Invalid latitude parameter' });
+    }
+    lat = parsedLat;
+  }
+
+  if (lonStr !== undefined) {
+    const parsedLon = parseFloat(lonStr);
+    if (isNaN(parsedLon)) {
+      return res.status(400).json({ success: false, error: 'Invalid longitude parameter' });
+    }
+    lon = parsedLon;
+  }
+
   const openWeatherKey = process.env.OPENWEATHER_API_KEY || process.env.OPEN_WEATHER_API_KEY;
 
   try {
@@ -279,7 +310,7 @@ app.get('/api/weather', async (req, res) => {
 });
 
 // NEW API ENDPOINTS: VOICE CAPTION AND CHAT TRANSLATOR
-app.post('/api/voice/caption', async (req, res) => {
+app.post(['/api/voice/caption', '/voice/caption'], async (req, res) => {
   const { audioBase64, language = 'kn' } = req.body;
 
   if (!apiKey || apiKey.includes('MY_GEMINI_API_KEY')) {
@@ -312,7 +343,7 @@ Return STRICTLY clean JSON matching this keys structural format:
   }
 });
 
-app.post('/api/chat/translate', async (req, res) => {
+app.post(['/api/chat/translate', '/chat/translate'], async (req, res) => {
   const { text, targetLang = 'en' } = req.body;
   if (!text) {
     return res.status(400).json({ error: 'Text input parameter is required' });
@@ -338,7 +369,7 @@ app.post('/api/chat/translate', async (req, res) => {
 // 1. KRISHI AI AGENT ROUTE (TOOL-CALLING WITH GOVERNMENT GROUNDING)
 const chatIpRateLimits = new Map<string, number[]>();
 
-app.post('/api/chat', async (req, res) => {
+app.post(['/api/chat', '/chat'], async (req, res) => {
   const { 
     message, 
     history = [],
@@ -437,7 +468,7 @@ app.post('/api/chat', async (req, res) => {
 });
 
 // 1B. OFFICIAL AGMARKNET / DATA.GOV.IN MANDI APMC MARKET DATA ROUTES
-app.get(['/api/agriculture/mandi', '/api/mandi'], (req, res) => {
+app.get(['/api/agriculture/mandi', '/agriculture/mandi', '/api/mandi', '/mandi'], (req, res) => {
   try {
     const { state, district, commodity, search, page, limit, sortBy } = req.query;
     const result = queryOfficialMandis({
@@ -460,7 +491,7 @@ app.get(['/api/agriculture/mandi', '/api/mandi'], (req, res) => {
   }
 });
 
-app.get(['/api/agriculture/mandi/:id', '/api/mandi/:id'], (req, res) => {
+app.get(['/api/agriculture/mandi/:id', '/agriculture/mandi/:id', '/api/mandi/:id', '/mandi/:id'], (req, res) => {
   try {
     const mandi = getMandiById(req.params.id);
     if (!mandi) {
@@ -474,38 +505,19 @@ app.get(['/api/agriculture/mandi/:id', '/api/mandi/:id'], (req, res) => {
 
 
 // 2. AI CROP DOCTOR (DISEASE DIAGNOSIS) ROUTE
-app.post('/api/diagnose', async (req, res) => {
+app.post(['/api/diagnose', '/diagnose'], async (req, res) => {
   const { imageBase64, language = 'en' } = req.body;
   if (!imageBase64) {
-    return res.status(400).json({ error: 'Leaf image is required for diagnosis' });
+    return res.status(400).json({ success: false, error: 'Leaf image is required for diagnosis' });
   }
 
   const defaultCrop = (req.body?.cropType || req.body?.cropName || 'Tomato');
 
-  const fallbackReport = {
-    id: `report_${Date.now()}`,
-    timestamp: new Date().toISOString(),
-    imageUrl: compactImageUrl(imageBase64),
-    cropName: defaultCrop,
-    diseaseName: 'Early Leaf Blight / Foliar Spot Assessment',
-    confidence: '86%',
-    severity: 'MEDIUM' as const,
-    symptoms: 'Concentric brown spots with chlorotic yellow halo visible on foliage.',
-    treatmentSuggestions: 'Prune infected lower foliage and apply organic bio-control spray in the early morning.',
-    organicControl: 'Spray cold-pressed Neem seed oil (5ml/L water) or bio-fungicide Trichoderma harzianum @ 5g/L.',
-    chemicalControl: 'Mancozeb 75% WP @ 2g/L or Copper Oxychloride 50% WP @ 3g/L of water if spots exceed 20% leaf area.',
-    dosage: '2 grams per liter of water (approx 500 liters of spray solution per hectare).',
-    preventionTips: 'Maintain plant spacing for air circulation and practice furrow irrigation to avoid wet foliage.',
-    farmerPrecautions: 'Wear protective mask and gloves during spraying. Do not spray during peak midday heat or windy hours.',
-    disclaimer: 'Advisory Assessment: Confirm with your local Krishi Vigyan Kendra (KVK) or agriculture extension officer.',
-    language
-  };
-
   if (!apiKey || apiKey.includes('MY_GEMINI_API_KEY')) {
-    serverReports = loadJSON(REPORTS_FILE, []);
-    serverReports = [fallbackReport, ...serverReports];
-    saveJSON(REPORTS_FILE, serverReports);
-    return res.json(fallbackReport);
+    return res.status(503).json({
+      success: false,
+      error: 'Crop Doctor AI analysis is temporarily unavailable. Please configure GEMINI_API_KEY.'
+    });
   }
 
   try {
@@ -527,7 +539,7 @@ app.post('/api/diagnose', async (req, res) => {
             mimeType = contentType;
           }
         }
-      } catch (fetchErr) {
+      } catch (fetchErr: any) {
         console.error('[Fetch URL Image Handled]', fetchErr?.message || fetchErr);
         throw fetchErr;
       }
@@ -584,10 +596,10 @@ CRITICAL: Translate all string values into the local language with code "${langu
       severity: parsed.severity || 'MEDIUM',
       symptoms: parsed.symptoms || 'Visual symptoms analyzed from photo.',
       treatmentSuggestions: parsed.treatmentSuggestions || '',
-      organicControl: parsed.organicControl || fallbackReport.organicControl,
-      chemicalControl: parsed.chemicalControl || fallbackReport.chemicalControl,
-      dosage: parsed.dosage || fallbackReport.dosage,
-      preventionTips: parsed.preventionTips || fallbackReport.preventionTips,
+      organicControl: parsed.organicControl || 'Spray cold-pressed Neem seed oil (5ml/L water) or bio-fungicide Trichoderma harzianum @ 5g/L.',
+      chemicalControl: parsed.chemicalControl || 'Mancozeb 75% WP @ 2g/L or Copper Oxychloride 50% WP @ 3g/L of water if spots exceed 20% leaf area.',
+      dosage: parsed.dosage || '2 grams per liter of water (approx 500 liters of spray solution per hectare).',
+      preventionTips: parsed.preventionTips || 'Maintain plant spacing for air circulation and practice furrow irrigation to avoid wet foliage.',
       farmerPrecautions: parsed.farmerPrecautions || 'Wear safety mask and gloves during chemical application.',
       disclaimer: parsed.disclaimer || 'Advisory Assessment: Confirm with local KVK experts for severe crop conditions.',
       language
@@ -598,17 +610,17 @@ CRITICAL: Translate all string values into the local language with code "${langu
     saveJSON(REPORTS_FILE, serverReports);
 
     res.json(savedReport);
-  } catch (err) {
-    console.warn('[Leaf Diagnosis Handled with Grounded Report]:', (err as any)?.message || err);
-    serverReports = loadJSON(REPORTS_FILE, []);
-    serverReports = [fallbackReport, ...serverReports];
-    saveJSON(REPORTS_FILE, serverReports);
-    res.json(fallbackReport);
+  } catch (err: any) {
+    console.error('[Leaf Diagnosis Error]:', err?.message || err);
+    return res.status(503).json({
+      success: false,
+      error: 'Crop Doctor AI analysis is temporarily unavailable. Please try again.'
+    });
   }
 });
 
 // 3. AI FUTURE CROP PRICE ADVICE & PREDICTION ROUTE
-app.post('/api/predict-crop', async (req, res) => {
+app.post(['/api/predict-crop', '/predict-crop'], async (req, res) => {
   const cropName = req.body?.cropName || req.body?.crop;
   const language = req.body?.language || 'en';
   if (!cropName) {
@@ -1008,10 +1020,31 @@ app.post('/api/irrigation/preferences', (req, res) => {
   res.json(userData.preferences);
 });
 
-// Full-stack Vite setup
+// 404 handler for API routes - ensures JSON response, never HTML 404
+app.all(['/api', '/api/*'], (req, res) => {
+  res.status(404).json({
+    success: false,
+    error: `API route not found: ${req.method} ${req.originalUrl || req.url}`
+  });
+});
+
+// Global error handling middleware for API routes
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('[API Server Error]:', err);
+  if (req.path?.startsWith('/api') || req.url?.startsWith('/api')) {
+    return res.status(err.status || 500).json({
+      success: false,
+      error: err.message || 'Internal server error'
+    });
+  }
+  next(err);
+});
+
+// Full-stack Vite setup (used for standalone node/local development)
 const startServer = async () => {
   if (!isProd) {
     console.log('Running server in DEVELOPMENT mode with Vite Middleware...');
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'custom',
@@ -1021,6 +1054,9 @@ const startServer = async () => {
 
     // Serve index.html dynamically for all other non-API routes
     app.use('*', async (req, res, next) => {
+      if (req.originalUrl?.startsWith('/api') || req.path?.startsWith('/api')) {
+        return next();
+      }
       const url = req.originalUrl;
       try {
         let template = await vite.transformIndexHtml(url, `<!doctype html>
@@ -1047,7 +1083,10 @@ const startServer = async () => {
       : path.join(__dirname, '../dist');
     app.use(express.static(distPath));
 
-    app.get('*', (req, res) => {
+    app.get('*', (req, res, next) => {
+      if (req.originalUrl?.startsWith('/api') || req.path?.startsWith('/api')) {
+        return next();
+      }
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
@@ -1057,4 +1096,10 @@ const startServer = async () => {
   });
 };
 
-startServer();
+// Only listen when running standalone directly (not when imported as a Vercel serverless function)
+if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+  startServer();
+}
+
+export default app;
+export { app };
