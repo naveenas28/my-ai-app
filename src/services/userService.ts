@@ -121,9 +121,9 @@ export async function compressImage(
  * Works strictly on Firebase Free (Spark $0) plan without requiring Cloud Storage billing.
  */
 export async function uploadProfilePhoto(uid: string, file: File): Promise<string> {
-  const currentUid = uid || auth.currentUser?.uid;
+  const currentUid = auth.currentUser?.uid || uid || localStorage.getItem('agri_user_uid');
   if (!currentUid) {
-    throw new Error('User UID is required for profile photo save.');
+    throw new Error('User session not found. Please log in.');
   }
   if (!file) return '';
 
@@ -140,29 +140,48 @@ export async function uploadProfilePhoto(uid: string, file: File): Promise<strin
   console.log('Profile photo client compression started for UID:', currentUid);
 
   try {
-    // Compress image to ~15-30KB JPEG Data URL
+    // Compress image to ~15-30KB JPEG Data URL using HTML5 canvas
     const dataUrl = await compressImage(file, 300, 300, 0.75);
 
     // Verify compressed size fits well within Firestore's 1MB document limit
-    // Data URL string length < 500,000 chars is ~375KB raw
     if (dataUrl.length > 500000) {
-      throw new Error('Compressed image is still too large for Firestore document storage. Please choose a smaller image.');
+      throw new Error('Compressed image is still too large for document storage. Please choose a smaller image.');
     }
 
     console.log(`Image compressed successfully. Data URL length: ${dataUrl.length} chars`);
 
-    // Save URL to Firestore users/{uid} profilePhotoUrl & photoURL
-    const userRef = doc(db, 'users', currentUid);
-    await setDoc(userRef, {
-      profilePhotoUrl: dataUrl,
-      photoURL: dataUrl,
-      updatedAt: new Date().toISOString()
-    }, { merge: true });
+    // 1. Save to local device storage / cache immediately (Zero-cost, instant offline-ready)
+    localStorage.setItem(`profile_photo_${currentUid}`, dataUrl);
+    localStorage.setItem('agri_profile_photo', dataUrl);
 
-    console.log('Firestore profilePhotoUrl updated successfully under users/' + currentUid);
+    try {
+      const localData = localStorage.getItem(`agri_profile_${currentUid}`) || localStorage.getItem('agri_user_profile');
+      if (localData) {
+        const parsed = JSON.parse(localData);
+        parsed.profilePhotoUrl = dataUrl;
+        parsed.photoURL = dataUrl;
+        parsed.updatedAt = new Date().toISOString();
+        localStorage.setItem(`agri_profile_${currentUid}`, JSON.stringify(parsed));
+        localStorage.setItem('agri_user_profile', JSON.stringify(parsed));
+      }
+    } catch (cacheErr) {
+      console.warn('Cache profile update warning:', cacheErr);
+    }
 
-    // Update Firebase Auth user photoURL if signed in
+    // 2. If authenticated user exists, sync metadata and photo Data URL to Firestore users/{uid}
     if (auth.currentUser && auth.currentUser.uid === currentUid) {
+      try {
+        const userRef = doc(db, 'users', currentUid);
+        await setDoc(userRef, {
+          profilePhotoUrl: dataUrl,
+          photoURL: dataUrl,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+        console.log('Firestore profilePhotoUrl updated successfully under users/' + currentUid);
+      } catch (firestoreErr: any) {
+        console.warn('Firestore profile photo sync notice (local device storage preserved):', firestoreErr?.message || firestoreErr);
+      }
+
       try {
         await updateProfile(auth.currentUser, { photoURL: dataUrl });
         console.log('Firebase Auth user photoURL updated');
@@ -173,7 +192,7 @@ export async function uploadProfilePhoto(uid: string, file: File): Promise<strin
 
     return dataUrl;
   } catch (error: any) {
-    console.error('Failed to compress or save profile photo to Firestore:', error);
+    console.error('Failed to compress or save profile photo:', error);
     throw error;
   }
 }
@@ -432,7 +451,7 @@ export async function syncAuthUserWithFirestore(
         updatedAt: now,
         lastLogin: now,
         loginMethod,
-        profileCompleted: false,
+        profileCompleted: loginMethod === 'Google' || Boolean(authUser.displayName),
         role: 'farmer',
         accountStatus: 'active',
         farmerType: 'Registered Farmer'

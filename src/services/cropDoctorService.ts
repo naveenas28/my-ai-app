@@ -113,7 +113,12 @@ export async function diagnoseAndSaveCropImage(
   });
 
   if (!response.ok) {
-    throw new Error('Crop Doctor AI analysis server error');
+    let serverMsg = 'Crop Doctor AI analysis server error';
+    try {
+      const errJson = await response.json();
+      if (errJson?.error) serverMsg = errJson.error;
+    } catch {}
+    throw new Error(serverMsg);
   }
 
   const result = await response.json();

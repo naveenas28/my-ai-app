@@ -42,7 +42,7 @@ import { AICropPredictionSystem } from './components/AICropPredictionSystem';
 import { VoicePostsSystem } from './components/VoicePostsSystem';
 import { FarmerChatSystem } from './components/FarmerChatSystem';
 import { auth, googleProvider, RecaptchaVerifier, signInWithPhoneNumber } from './firebase';
-import { signInAnonymously, onAuthStateChanged, signOut, signInWithPopup, ConfirmationResult } from 'firebase/auth';
+import { signInAnonymously, onAuthStateChanged, signOut, signInWithPopup, signInWithRedirect, getRedirectResult, ConfirmationResult } from 'firebase/auth';
 import { syncUserInFirestore, syncAuthUserWithFirestore, getUserProfile, saveFarmerProfile, UserProfileDoc } from './services/userService';
 import { FarmerProfileForm } from './components/FarmerProfileForm';
 import { KYCGovernmentBenefits } from './components/KYCGovernmentBenefits';
@@ -253,6 +253,26 @@ export default function App() {
       }
     };
 
+    // Process Google redirect result if page returned from OAuth redirect
+    getRedirectResult(auth).then(async (result) => {
+      if (result && result.user) {
+        const user = result.user;
+        const displayName = user.displayName || user.email || 'Farmer Partner';
+        setFirebaseAuthUid(user.uid);
+        setFirebaseAuthName(displayName);
+        localStorage.setItem('agri_verified_farmer', 'true');
+        localStorage.setItem('agri_user_uid', user.uid);
+        localStorage.setItem('agri_partner_name', displayName);
+        localStorage.setItem('agri_login_method', 'Google');
+        setIsJoined(true);
+        setShowOtpScreen(false);
+        setShowRegistrationForm(false);
+        triggerVisualToast(`Logged in as ${displayName}!`);
+      }
+    }).catch((err) => {
+      console.warn('Google redirect sign-in notice:', err);
+    });
+
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (user) {
         console.log('Firebase Authenticated:', true);
@@ -283,7 +303,8 @@ export default function App() {
           localStorage.setItem('agri_verified_farmer', 'true');
           localStorage.setItem('agri_user_uid', user.uid);
 
-          if (profile && profile.profileCompleted) {
+          const isGoogleUser = providerId === 'google.com' || user.providerData?.some(p => p.providerId === 'google.com');
+          if (isGoogleUser || (profile && profile.profileCompleted)) {
             setIsJoined(true);
             setShowOtpScreen(false);
             setShowRegistrationForm(false);
@@ -934,13 +955,56 @@ export default function App() {
   const handleGoogleSignIn = async () => {
     setIsSendingOtp(true);
     try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const user = result.user;
-      console.log('Google Auth success:', user.uid, user.displayName, user.email, user.photoURL);
-      triggerVisualToast(`Logged in as ${user.displayName || user.email || 'Farmer'}!`);
+      let user: any = null;
+      try {
+        const result = await signInWithPopup(auth, googleProvider);
+        user = result.user;
+      } catch (popupErr: any) {
+        console.warn('Popup sign-in encounter, evaluating redirect fallback:', popupErr?.code || popupErr);
+        if (
+          popupErr?.code === 'auth/popup-blocked' ||
+          popupErr?.code === 'auth/cancelled-popup-request' ||
+          popupErr?.code === 'auth/popup-closed-by-user'
+        ) {
+          triggerVisualToast('Opening Google Sign-In redirect...');
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        }
+        throw popupErr;
+      }
+
+      if (user) {
+        console.log('Google Auth success:', user.uid, user.displayName, user.email, user.photoURL);
+        const displayName = user.displayName || user.email || 'Farmer Partner';
+        setFirebaseAuthUid(user.uid);
+        setFirebaseAuthName(displayName);
+        localStorage.setItem('agri_verified_farmer', 'true');
+        localStorage.setItem('agri_user_uid', user.uid);
+        localStorage.setItem('agri_partner_name', displayName);
+        localStorage.setItem('agri_login_method', 'Google');
+
+        try {
+          const profile = await syncAuthUserWithFirestore(user, currentLang, 'Google');
+          if (profile) {
+            setFullUserProfile(profile);
+            localStorage.setItem('agri_user_profile', JSON.stringify(profile));
+          }
+        } catch (syncErr) {
+          console.warn('Google profile sync non-fatal:', syncErr);
+        }
+
+        setIsJoined(true);
+        setShowOtpScreen(false);
+        setShowRegistrationForm(false);
+        triggerVisualToast(`Logged in as ${displayName}!`);
+      }
     } catch (error: any) {
       console.error('Google Sign-In Error:', error);
-      triggerVisualToast(`Google Sign-In failed: ${error?.message || 'Authentication error'}`);
+      let errMsg = error?.message || 'Authentication error';
+      if (error?.code === 'auth/unauthorized-domain') {
+        errMsg = 'This domain is not in Firebase Auth Authorized Domains. Please check Firebase Console.';
+      }
+      triggerVisualToast(`Google Sign-In failed: ${errMsg}`);
     } finally {
       setIsSendingOtp(false);
     }
@@ -1291,20 +1355,21 @@ export default function App() {
       triggerVisualToast('AI Doctor Report generated & saved successfully! 🍃');
     } catch (e: any) {
       console.error('Diagnosis error:', e);
-      triggerVisualToast('AI vision diagnosis service is temporarily unavailable. Please try again.');
+      const userErrorMsg = e?.message || 'AI vision diagnosis service is temporarily unavailable. Please try again.';
+      triggerVisualToast(userErrorMsg);
       setDiagnosisReport({
         cropName: 'Diagnosis Unavailable',
-        diseaseName: 'AI service is temporarily unavailable',
+        diseaseName: userErrorMsg,
         confidence: 'N/A',
         severity: 'LOW',
-        symptoms: 'Unable to analyze image at this moment. Please verify internet connection or try again.',
+        symptoms: 'Unable to analyze image: ' + userErrorMsg,
         treatmentSuggestions: 'For immediate assistance with severe crop symptoms, consult your nearest Krishi Vigyan Kendra (KVK).',
         organicControl: 'Keep leaves well ventilated and avoid excess moisture until diagnosis.',
         chemicalControl: 'Do not spray unverified chemical pesticides without local expert guidance.',
         dosage: 'N/A',
         preventionTips: 'Inspect leaves regularly and consult local agricultural extension officer.',
         farmerPrecautions: 'Wear protective gear when handling diseased foliage.',
-        disclaimer: 'Agricultural AI Advisory Notice: Image diagnosis service is temporarily unavailable.'
+        disclaimer: 'Agricultural AI Advisory Notice: ' + userErrorMsg
       });
     } finally {
       setTimeout(() => {

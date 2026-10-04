@@ -81749,7 +81749,9 @@ app.get(["/api/weather", "/weather"], async (req, res) => {
 });
 app.post(["/api/voice/caption", "/voice/caption"], async (req, res) => {
   const { audioBase64, language = "kn" } = req.body;
-  if (!apiKey || apiKey.includes("MY_GEMINI_API_KEY")) {
+  const currentApiKey = getEffectiveApiKey();
+  const currentAi = getAiClient();
+  if (!currentApiKey || currentApiKey.includes("MY_GEMINI_API_KEY")) {
     return res.status(503).json({ success: false, error: "AI voice caption service is temporarily unavailable." });
   }
   try {
@@ -81761,7 +81763,7 @@ Please generate:
 
 Return STRICTLY clean JSON matching this keys structural format:
 {"transcription": "...", "translation": "...", "summary": "..."}`;
-    const response = await ai.models.generateContent({
+    const response = await currentAi.models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt,
       config: {
@@ -81780,12 +81782,14 @@ app.post(["/api/chat/translate", "/chat/translate"], async (req, res) => {
   if (!text) {
     return res.status(400).json({ error: "Text input parameter is required" });
   }
-  if (!apiKey || apiKey.includes("MY_GEMINI_API_KEY")) {
+  const currentApiKey = getEffectiveApiKey();
+  const currentAi = getAiClient();
+  if (!currentApiKey || currentApiKey.includes("MY_GEMINI_API_KEY")) {
     return res.status(503).json({ success: false, error: "AI translation service is temporarily unavailable." });
   }
   try {
     const prompt = `Translate this agricultural message: "${text}" into the language represented by country/region code is: "${targetLang}". Keep the tone professional, humble, direct, and farmer-friendly. Avoid dry jargon. Output only the translated text, with no extra surrounding quotes or comments.`;
-    const response = await ai.models.generateContent({
+    const response = await currentAi.models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt
     });
@@ -81842,7 +81846,9 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
   try {
     const combinedHistory = history.length > 0 ? history : conversationHistory.length > 0 ? conversationHistory : previousChat;
     const combinedProfile = farmerProfile || userContext || {};
-    const agentResult = await executeKrishiAgent(ai, apiKey, {
+    const currentApiKey = getEffectiveApiKey();
+    const currentAi = getAiClient();
+    const agentResult = await executeKrishiAgent(currentAi, currentApiKey, {
       message: query,
       language,
       uid,
@@ -81924,7 +81930,9 @@ app.post(["/api/diagnose", "/diagnose"], async (req, res) => {
     return res.status(400).json({ success: false, error: "Leaf image is required for diagnosis" });
   }
   const defaultCrop = req.body?.cropType || req.body?.cropName || "Tomato";
-  if (!apiKey || apiKey.includes("MY_GEMINI_API_KEY")) {
+  const currentApiKey = getEffectiveApiKey();
+  const currentAi = getAiClient();
+  if (!currentApiKey || currentApiKey.includes("MY_GEMINI_API_KEY")) {
     return res.status(503).json({
       success: false,
       error: "Crop Doctor AI analysis is temporarily unavailable. Please configure GEMINI_API_KEY."
@@ -81962,8 +81970,7 @@ app.post(["/api/diagnose", "/diagnose"], async (req, res) => {
         data: base64Clean
       }
     };
-    const textPart = {
-      text: `Identify the crop type, disease, damage, pest symptoms, or nutrient deficiency shown in this leaf/crop image.
+    const promptText = `Identify the crop type, disease, damage, pest symptoms, or nutrient deficiency shown in this leaf/crop image.
 Respond STRICTLY in JSON format matching this schema:
 {
   "cropName": "Name of the Crop (e.g. Tomato, Paddy, Wheat, Cotton, Maize, Chillie, Onion)",
@@ -81979,37 +81986,50 @@ Respond STRICTLY in JSON format matching this schema:
   "farmerPrecautions": "Crucial health & safety precautions for the farmer while applying (e.g., wear protective mask and gloves, spray at twilight)",
   "disclaimer": "Advisory Assessment: This image-based evaluation is preliminary and advisory. Please confirm with your local Krishi Vigyan Kendra (KVK) or agricultural extension officer."
 }
-CRITICAL: Translate all string values into the local language with code "${language}" (where 'kn' is Kannada, 'hi' is Hindi, 'ta' is Tamil, 'te' is Telugu, 'ml' is Malayalam, 'bn' is Bengali, 'mr' is Marathi, 'pa' is Punjabi, 'en' is English). Keep JSON key names EXACTLY in English as defined above. Do not wrap in markdown boxes.`
-    };
-    let response;
-    try {
-      response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: { parts: [imagePart, textPart] },
-        config: {
-          responseMimeType: "application/json"
-        }
-      });
-    } catch (mErr) {
+CRITICAL: Translate all string values into the local language with code "${language}" (where 'kn' is Kannada, 'hi' is Hindi, 'ta' is Tamil, 'te' is Telugu, 'ml' is Malayalam, 'bn' is Bengali, 'mr' is Marathi, 'pa' is Punjabi, 'en' is English). Keep JSON key names EXACTLY in English as defined above. Do not wrap in markdown boxes.`;
+    const visionModels = [
+      "gemini-2.5-flash",
+      "gemini-2.0-flash",
+      "gemini-2.0-flash-lite",
+      "gemini-1.5-flash"
+    ];
+    let response = null;
+    let lastError = null;
+    for (const model of visionModels) {
       try {
-        response = await ai.models.generateContent({
-          model: "gemini-2.0-flash",
-          contents: { parts: [imagePart, textPart] },
+        response = await currentAi.models.generateContent({
+          model,
+          contents: [imagePart, promptText],
           config: {
             responseMimeType: "application/json"
           }
         });
-      } catch (fErr) {
-        response = await ai.models.generateContent({
-          model: "gemini-1.5-flash",
-          contents: { parts: [imagePart, textPart] },
-          config: {
-            responseMimeType: "application/json"
-          }
-        });
+        if (response?.text) {
+          break;
+        }
+      } catch (mErr) {
+        lastError = mErr;
+        console.warn(`[Crop Doctor ${model} attempt failed]:`, mErr?.message || mErr);
       }
     }
-    const parsed = JSON.parse(response.text || "{}");
+    if (!response || !response.text) {
+      const isQuota = lastError?.status === 429 || lastError?.message?.includes("quota") || lastError?.message?.includes("RESOURCE_EXHAUSTED");
+      const isBlocked = lastError?.message?.includes("blocked") || lastError?.message?.includes("PERMISSION_DENIED");
+      const errMsg = isQuota ? "AI vision quota limit reached for free tier. Please wait a moment and try again." : isBlocked ? "AI vision service API access is restricted. Please check your Gemini API key permissions." : "AI vision diagnosis service is temporarily unavailable. Please try again.";
+      return res.status(503).json({
+        success: false,
+        error: errMsg
+      });
+    }
+    let parsed = {};
+    try {
+      parsed = JSON.parse(response.text || "{}");
+    } catch {
+      const jsonMatch = response.text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        parsed = JSON.parse(jsonMatch[0]);
+      }
+    }
     const savedReport = {
       id: `report_${Date.now()}`,
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
@@ -82046,7 +82066,9 @@ app.post(["/api/predict-crop", "/predict-crop"], async (req, res) => {
   if (!cropName) {
     return res.status(400).json({ error: "Crop name is required" });
   }
-  if (!apiKey || apiKey.includes("MY_GEMINI_API_KEY")) {
+  const currentApiKey = getEffectiveApiKey();
+  const currentAi = getAiClient();
+  if (!currentApiKey || currentApiKey.includes("MY_GEMINI_API_KEY")) {
     return res.status(503).json({
       success: false,
       error: "AI service is temporarily unavailable. Please try again."
@@ -82062,7 +82084,7 @@ Provide output STRICTLY in JSON format using this exact schema:
   "advisoryText": "A simplified, step-by-step human advisory advising when to sow, how the weather might affect the crop, and what pricing opportunity to target."
 }
 IMPORTANT: Translate all string values (except keys) into the local language with code "${language}". Do not write any outer markdown brackets.`;
-    const response = await ai.models.generateContent({
+    const response = await currentAi.models.generateContent({
       model: "gemini-2.5-flash",
       contents: textPrompt,
       config: {

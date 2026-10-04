@@ -219,14 +219,14 @@ export const ProfileTabView: React.FC<ProfileTabViewProps> = ({
 
   const processAndUploadPhoto = async (file: File) => {
     if (!file) return;
-    const activeUid = firebaseAuthUid || auth.currentUser?.uid || localStorage.getItem('agri_user_uid');
+    const activeUid = auth.currentUser?.uid || firebaseAuthUid || localStorage.getItem('agri_user_uid');
     if (!activeUid) {
       triggerToast('Error: User session not found. Please log in.');
       return;
     }
 
     setIsUploadingPhoto(true);
-    triggerToast('Compressing and saving photo to Firestore...');
+    triggerToast('Compressing and saving profile photo...');
 
     try {
       const dataUrl = await uploadProfilePhoto(activeUid, file);
