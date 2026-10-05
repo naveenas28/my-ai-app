@@ -706,13 +706,17 @@ CRITICAL: Translate all string values into the local language with code "${langu
     }
 
     if (!response || !response.text) {
-      const isQuota = lastError?.status === 429 || lastError?.message?.includes('quota') || lastError?.message?.includes('RESOURCE_EXHAUSTED');
-      const isBlocked = lastError?.message?.includes('blocked') || lastError?.message?.includes('PERMISSION_DENIED');
-      const errMsg = isQuota 
-        ? 'AI vision quota limit reached for free tier. Please wait a moment and try again.'
-        : isBlocked
-        ? 'AI vision service API access is restricted. Please check your Gemini API key permissions.'
-        : 'AI vision diagnosis service is temporarily unavailable. Please try again.';
+      const errStr = (lastError?.message || String(lastError || '')).toLowerCase();
+      const isQuota = lastError?.status === 429 || errStr.includes('quota') || errStr.includes('resource_exhausted');
+      const isAuthOrBlocked = lastError?.status === 403 || lastError?.status === 401 || errStr.includes('permission_denied') || errStr.includes('service_disabled') || errStr.includes('api_key_service_blocked') || errStr.includes('disabled') || errStr.includes('blocked');
+
+      let errMsg = 'AI vision diagnosis service is temporarily unavailable. Please try again.';
+      if (isQuota) {
+        errMsg = 'AI vision quota limit reached for free tier. Please wait a moment and try again.';
+      } else if (isAuthOrBlocked) {
+        errMsg = 'AI vision service API access is restricted. Please check that the Gemini API is enabled for your project.';
+      }
+
       return res.status(503).json({
         success: false,
         error: errMsg
