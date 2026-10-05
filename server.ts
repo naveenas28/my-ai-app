@@ -118,6 +118,39 @@ const getAiClient = () => {
   });
 };
 
+const DEFAULT_GEMINI_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash'
+];
+
+async function generateWithModelFallback(
+  aiClient: GoogleGenAI,
+  payload: {
+    contents: any;
+    config?: any;
+    models?: string[];
+  }
+) {
+  const models = payload.models || DEFAULT_GEMINI_MODELS;
+  let lastErr: any = null;
+  for (const model of models) {
+    try {
+      const resp = await aiClient.models.generateContent({
+        model,
+        contents: payload.contents,
+        config: payload.config
+      });
+      if (resp && resp.text) return resp;
+    } catch (e: any) {
+      lastErr = e;
+      console.warn(`[Gemini model fallback: ${model} failed]:`, e?.message || e);
+    }
+  }
+  throw lastErr || new Error('All model candidates failed');
+}
+
 // Healthcheck endpoint
 app.get(['/api/health', '/health'], (req, res) => {
   const currentKey = getEffectiveApiKey();
@@ -423,8 +456,7 @@ Please generate:
 Return STRICTLY clean JSON matching this keys structural format:
 {"transcription": "...", "translation": "...", "summary": "..."}`;
 
-    const response = await currentAi.models.generateContent({
-      model: 'gemini-2.5-flash',
+    const response = await generateWithModelFallback(currentAi, {
       contents: prompt,
       config: {
         responseMimeType: 'application/json'
@@ -454,8 +486,7 @@ app.post(['/api/chat/translate', '/chat/translate'], async (req, res) => {
 
   try {
     const prompt = `Translate this agricultural message: "${text}" into the language represented by country/region code is: "${targetLang}". Keep the tone professional, humble, direct, and farmer-friendly. Avoid dry jargon. Output only the translated text, with no extra surrounding quotes or comments.`;
-    const response = await currentAi.models.generateContent({
-      model: 'gemini-2.5-flash',
+    const response = await generateWithModelFallback(currentAi, {
       contents: prompt
     });
     res.json({ translatedText: response.text?.trim() || text });
@@ -678,9 +709,10 @@ Respond STRICTLY in JSON format matching this schema:
 CRITICAL: Translate all string values into the local language with code "${language}" (where 'kn' is Kannada, 'hi' is Hindi, 'ta' is Tamil, 'te' is Telugu, 'ml' is Malayalam, 'bn' is Bengali, 'mr' is Marathi, 'pa' is Punjabi, 'en' is English). Keep JSON key names EXACTLY in English as defined above. Do not wrap in markdown boxes.`;
 
     const visionModels = [
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite',
       'gemini-2.5-flash',
       'gemini-2.0-flash',
-      'gemini-2.0-flash-lite',
       'gemini-1.5-flash'
     ];
 
@@ -691,7 +723,10 @@ CRITICAL: Translate all string values into the local language with code "${langu
       try {
         response = await currentAi.models.generateContent({
           model,
-          contents: [imagePart, promptText],
+          contents: [
+            imagePart,
+            { text: promptText }
+          ],
           config: {
             responseMimeType: 'application/json',
           }
@@ -702,6 +737,22 @@ CRITICAL: Translate all string values into the local language with code "${langu
       } catch (mErr: any) {
         lastError = mErr;
         console.warn(`[Crop Doctor ${model} attempt failed]:`, mErr?.message || mErr);
+        // Fallback retry without responseMimeType in case model doesn't support json mode
+        try {
+          response = await currentAi.models.generateContent({
+            model,
+            contents: [
+              imagePart,
+              { text: promptText }
+            ]
+          });
+          if (response?.text) {
+            break;
+          }
+        } catch (mErr2: any) {
+          lastError = mErr2;
+          console.warn(`[Crop Doctor ${model} non-json fallback attempt failed]:`, mErr2?.message || mErr2);
+        }
       }
     }
 
@@ -796,8 +847,7 @@ Provide output STRICTLY in JSON format using this exact schema:
 }
 IMPORTANT: Translate all string values (except keys) into the local language with code "${language}". Do not write any outer markdown brackets.`;
 
-    const response = await currentAi.models.generateContent({
-      model: 'gemini-2.5-flash',
+    const response = await generateWithModelFallback(currentAi, {
       contents: textPrompt,
       config: {
         responseMimeType: 'application/json',
@@ -941,8 +991,7 @@ app.post('/api/posts/:id/translate', async (req, res) => {
     const textPart = {
       text: `Translate the following text strictly into the language code "${targetLanguage || 'en'}" (where 'kn' is Kannada, 'hi' is Hindi, 'en' is English, 'ta' is Tamil, 'te' is Telugu). Respond ONLY with the clean translated message. Preserve agricultural terms in simple farmer dialect. Do not add quotes, notes or explanations. Text to translate: "${post.content}"`
     };
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+    const response = await generateWithModelFallback(ai, {
       contents: [textPart]
     });
     res.json({ translatedText: response.text?.trim() });
@@ -964,8 +1013,7 @@ app.post('/api/posts/:id/summarize', async (req, res) => {
     const textPart = {
       text: `Summarize the following farmer discussion post in 1-2 simple, easy-to-understand bullet points or sentences in language code "${language || 'en'}" (where 'kn' is Kannada, 'hi' is Hindi, 'en' is English). Keep it short, direct, and actionable for standard rural farmers. Text to summarize: "${post.content}"`
     };
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+    const response = await generateWithModelFallback(ai, {
       contents: [textPart]
     });
     res.json({ summary: response.text?.trim() });
@@ -987,8 +1035,7 @@ app.post('/api/posts/:id/suggest-reply', async (req, res) => {
     const textPart = {
       text: `Suggest a brief, friendly, highly scientifically accurate expert agriculture advisor comment reply in language "${language || 'en'}" (where 'kn' is Kannada, 'hi' is Hindi, 'en' is English) for the following crop problem/farming post: "${post.content}". Deliver ONLY the suggested reply text, keeping it to 1 concise sentence offering clear practical steps.`
     };
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+    const response = await generateWithModelFallback(ai, {
       contents: [textPart]
     });
     res.json({ suggestion: response.text?.trim() });

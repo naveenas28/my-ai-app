@@ -1701,21 +1701,19 @@ CRITICAL OPERATIONAL RULES:
         });
       }
 
+      const KRISHI_AGENT_MODELS = [
+        'gemini-3.8-flash',
+        'gemini-3.5-flash-lite',
+        'gemini-2.5-flash',
+        'gemini-2.0-flash'
+      ];
+
       let response: any;
-      try {
-        response = await activeAi.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents,
-          config: {
-            systemInstruction,
-            temperature: 0.3,
-            tools: [{ functionDeclarations: KRISHI_AGENT_TOOL_DECLARATIONS as any }]
-          }
-        });
-      } catch (mErr: any) {
-        if (mErr?.message?.includes('not found') || mErr?.status === 404 || mErr?.message?.includes('is not supported')) {
+      let lastModelError: any = null;
+      for (const m of KRISHI_AGENT_MODELS) {
+        try {
           response = await activeAi.models.generateContent({
-            model: 'gemini-2.0-flash',
+            model: m,
             contents,
             config: {
               systemInstruction,
@@ -1723,9 +1721,18 @@ CRITICAL OPERATIONAL RULES:
               tools: [{ functionDeclarations: KRISHI_AGENT_TOOL_DECLARATIONS as any }]
             }
           });
-        } else {
-          throw mErr;
+          if (response) break;
+        } catch (mErr: any) {
+          lastModelError = mErr;
+          console.warn(`[Krishi Agent model ${m} attempt failed]:`, mErr?.message || mErr);
+          const errStr = (mErr?.message || String(mErr)).toLowerCase();
+          if (mErr?.status === 429 || errStr.includes('quota') || errStr.includes('resource_exhausted')) {
+            throw mErr;
+          }
         }
+      }
+      if (!response && lastModelError) {
+        throw lastModelError;
       }
 
       // Handle Tool Calls returned dynamically by Gemini
@@ -1767,28 +1774,29 @@ CRITICAL OPERATIONAL RULES:
         ];
 
         let finalResponse: any;
-        try {
-          finalResponse = await activeAi.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: secondTurnContents,
-            config: {
-              systemInstruction,
-              temperature: 0.4
-            }
-          });
-        } catch (fErr: any) {
-          if (fErr?.message?.includes('not found') || fErr?.status === 404 || fErr?.message?.includes('is not supported')) {
+        let lastTurn2Error: any = null;
+        for (const m of KRISHI_AGENT_MODELS) {
+          try {
             finalResponse = await activeAi.models.generateContent({
-              model: 'gemini-2.0-flash',
+              model: m,
               contents: secondTurnContents,
               config: {
                 systemInstruction,
                 temperature: 0.4
               }
             });
-          } else {
-            throw fErr;
+            if (finalResponse) break;
+          } catch (fErr: any) {
+            lastTurn2Error = fErr;
+            console.warn(`[Krishi Agent turn2 model ${m} attempt failed]:`, fErr?.message || fErr);
+            const errStr = (fErr?.message || String(fErr)).toLowerCase();
+            if (fErr?.status === 429 || errStr.includes('quota') || errStr.includes('resource_exhausted')) {
+              throw fErr;
+            }
           }
+        }
+        if (!finalResponse && lastTurn2Error) {
+          throw lastTurn2Error;
         }
 
         const finalText = finalResponse.text || '';

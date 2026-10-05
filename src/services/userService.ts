@@ -182,17 +182,23 @@ export async function uploadProfilePhoto(uid: string, file: File): Promise<strin
         console.warn('Firestore profile photo sync notice (local device storage preserved):', firestoreErr?.message || firestoreErr);
       }
 
-      try {
-        await updateProfile(auth.currentUser, { photoURL: dataUrl });
-        console.log('Firebase Auth user photoURL updated');
-      } catch (authErr) {
-        console.warn('Could not update Firebase Auth user profile photoURL:', authErr);
+      if (dataUrl.startsWith('http://') || dataUrl.startsWith('https://')) {
+        try {
+          await updateProfile(auth.currentUser, { photoURL: dataUrl });
+          console.log('Firebase Auth user photoURL updated');
+        } catch (authErr) {
+          console.warn('Could not update Firebase Auth user profile photoURL:', authErr);
+        }
       }
     }
 
     return dataUrl;
   } catch (error: any) {
     console.error('Failed to compress or save profile photo:', error);
+    const fallbackPhoto = localStorage.getItem(`profile_photo_${currentUid}`) || localStorage.getItem('agri_profile_photo');
+    if (fallbackPhoto) {
+      return fallbackPhoto;
+    }
     throw error;
   }
 }

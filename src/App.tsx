@@ -1002,7 +1002,7 @@ export default function App() {
       console.error('Google Sign-In Error:', error);
       let errMsg = error?.message || 'Authentication error';
       if (error?.code === 'auth/unauthorized-domain') {
-        errMsg = 'This domain is not in Firebase Auth Authorized Domains. Please check Firebase Console.';
+        errMsg = 'Production domain not authorized. Please add "my-ai-app-sigma-one.vercel.app" in Firebase Console (Authentication > Settings > Authorized Domains).';
       }
       triggerVisualToast(`Google Sign-In failed: ${errMsg}`);
     } finally {
@@ -1394,7 +1394,7 @@ export default function App() {
     }
 
     setSelectedLeafImage(designImageUrl);
-    analyzeCropDiseaseImage(mockBase64);
+    analyzeCropDiseaseImage(designImageUrl);
   };
 
   // Native files uploader handler with format validation & canvas auto-compression

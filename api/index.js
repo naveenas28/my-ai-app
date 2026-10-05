@@ -81244,21 +81244,18 @@ CRITICAL OPERATIONAL RULES:
           parts: userParts
         });
       }
+      const KRISHI_AGENT_MODELS = [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash"
+      ];
       let response;
-      try {
-        response = await activeAi.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents,
-          config: {
-            systemInstruction,
-            temperature: 0.3,
-            tools: [{ functionDeclarations: KRISHI_AGENT_TOOL_DECLARATIONS }]
-          }
-        });
-      } catch (mErr) {
-        if (mErr?.message?.includes("not found") || mErr?.status === 404 || mErr?.message?.includes("is not supported")) {
+      let lastModelError = null;
+      for (const m of KRISHI_AGENT_MODELS) {
+        try {
           response = await activeAi.models.generateContent({
-            model: "gemini-2.0-flash",
+            model: m,
             contents,
             config: {
               systemInstruction,
@@ -81266,9 +81263,18 @@ CRITICAL OPERATIONAL RULES:
               tools: [{ functionDeclarations: KRISHI_AGENT_TOOL_DECLARATIONS }]
             }
           });
-        } else {
-          throw mErr;
+          if (response) break;
+        } catch (mErr) {
+          lastModelError = mErr;
+          console.warn(`[Krishi Agent model ${m} attempt failed]:`, mErr?.message || mErr);
+          const errStr = (mErr?.message || String(mErr)).toLowerCase();
+          if (mErr?.status === 429 || errStr.includes("quota") || errStr.includes("resource_exhausted")) {
+            throw mErr;
+          }
         }
+      }
+      if (!response && lastModelError) {
+        throw lastModelError;
       }
       const functionCalls = response.functionCalls;
       if (functionCalls && functionCalls.length > 0) {
@@ -81304,28 +81310,29 @@ CRITICAL OPERATIONAL RULES:
           }
         ];
         let finalResponse;
-        try {
-          finalResponse = await activeAi.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: secondTurnContents,
-            config: {
-              systemInstruction,
-              temperature: 0.4
-            }
-          });
-        } catch (fErr) {
-          if (fErr?.message?.includes("not found") || fErr?.status === 404 || fErr?.message?.includes("is not supported")) {
+        let lastTurn2Error = null;
+        for (const m of KRISHI_AGENT_MODELS) {
+          try {
             finalResponse = await activeAi.models.generateContent({
-              model: "gemini-2.0-flash",
+              model: m,
               contents: secondTurnContents,
               config: {
                 systemInstruction,
                 temperature: 0.4
               }
             });
-          } else {
-            throw fErr;
+            if (finalResponse) break;
+          } catch (fErr) {
+            lastTurn2Error = fErr;
+            console.warn(`[Krishi Agent turn2 model ${m} attempt failed]:`, fErr?.message || fErr);
+            const errStr = (fErr?.message || String(fErr)).toLowerCase();
+            if (fErr?.status === 429 || errStr.includes("quota") || errStr.includes("resource_exhausted")) {
+              throw fErr;
+            }
           }
+        }
+        if (!finalResponse && lastTurn2Error) {
+          throw lastTurn2Error;
         }
         const finalText = finalResponse.text || "";
         return {
@@ -81500,6 +81507,30 @@ var getAiClient = () => {
     }
   });
 };
+var DEFAULT_GEMINI_MODELS = [
+  "gemini-3.8-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash"
+];
+async function generateWithModelFallback(aiClient, payload) {
+  const models = payload.models || DEFAULT_GEMINI_MODELS;
+  let lastErr = null;
+  for (const model of models) {
+    try {
+      const resp = await aiClient.models.generateContent({
+        model,
+        contents: payload.contents,
+        config: payload.config
+      });
+      if (resp && resp.text) return resp;
+    } catch (e) {
+      lastErr = e;
+      console.warn(`[Gemini model fallback: ${model} failed]:`, e?.message || e);
+    }
+  }
+  throw lastErr || new Error("All model candidates failed");
+}
 app.get(["/api/health", "/health"], (req, res) => {
   const currentKey = getEffectiveApiKey();
   const rawKey = process.env.GEMINI_API_KEY || "";
@@ -81763,8 +81794,7 @@ Please generate:
 
 Return STRICTLY clean JSON matching this keys structural format:
 {"transcription": "...", "translation": "...", "summary": "..."}`;
-    const response = await currentAi.models.generateContent({
-      model: "gemini-2.5-flash",
+    const response = await generateWithModelFallback(currentAi, {
       contents: prompt,
       config: {
         responseMimeType: "application/json"
@@ -81789,8 +81819,7 @@ app.post(["/api/chat/translate", "/chat/translate"], async (req, res) => {
   }
   try {
     const prompt = `Translate this agricultural message: "${text}" into the language represented by country/region code is: "${targetLang}". Keep the tone professional, humble, direct, and farmer-friendly. Avoid dry jargon. Output only the translated text, with no extra surrounding quotes or comments.`;
-    const response = await currentAi.models.generateContent({
-      model: "gemini-2.5-flash",
+    const response = await generateWithModelFallback(currentAi, {
       contents: prompt
     });
     res.json({ translatedText: response.text?.trim() || text });
@@ -81988,9 +82017,10 @@ Respond STRICTLY in JSON format matching this schema:
 }
 CRITICAL: Translate all string values into the local language with code "${language}" (where 'kn' is Kannada, 'hi' is Hindi, 'ta' is Tamil, 'te' is Telugu, 'ml' is Malayalam, 'bn' is Bengali, 'mr' is Marathi, 'pa' is Punjabi, 'en' is English). Keep JSON key names EXACTLY in English as defined above. Do not wrap in markdown boxes.`;
     const visionModels = [
+      "gemini-3.8-flash",
+      "gemini-3.5-flash-lite",
       "gemini-2.5-flash",
       "gemini-2.0-flash",
-      "gemini-2.0-flash-lite",
       "gemini-1.5-flash"
     ];
     let response = null;
@@ -81999,7 +82029,10 @@ CRITICAL: Translate all string values into the local language with code "${langu
       try {
         response = await currentAi.models.generateContent({
           model,
-          contents: [imagePart, promptText],
+          contents: [
+            imagePart,
+            { text: promptText }
+          ],
           config: {
             responseMimeType: "application/json"
           }
@@ -82010,6 +82043,21 @@ CRITICAL: Translate all string values into the local language with code "${langu
       } catch (mErr) {
         lastError = mErr;
         console.warn(`[Crop Doctor ${model} attempt failed]:`, mErr?.message || mErr);
+        try {
+          response = await currentAi.models.generateContent({
+            model,
+            contents: [
+              imagePart,
+              { text: promptText }
+            ]
+          });
+          if (response?.text) {
+            break;
+          }
+        } catch (mErr2) {
+          lastError = mErr2;
+          console.warn(`[Crop Doctor ${model} non-json fallback attempt failed]:`, mErr2?.message || mErr2);
+        }
       }
     }
     if (!response || !response.text) {
@@ -82090,8 +82138,7 @@ Provide output STRICTLY in JSON format using this exact schema:
   "advisoryText": "A simplified, step-by-step human advisory advising when to sow, how the weather might affect the crop, and what pricing opportunity to target."
 }
 IMPORTANT: Translate all string values (except keys) into the local language with code "${language}". Do not write any outer markdown brackets.`;
-    const response = await currentAi.models.generateContent({
-      model: "gemini-2.5-flash",
+    const response = await generateWithModelFallback(currentAi, {
       contents: textPrompt,
       config: {
         responseMimeType: "application/json"
@@ -82221,8 +82268,7 @@ app.post("/api/posts/:id/translate", async (req, res) => {
     const textPart = {
       text: `Translate the following text strictly into the language code "${targetLanguage || "en"}" (where 'kn' is Kannada, 'hi' is Hindi, 'en' is English, 'ta' is Tamil, 'te' is Telugu). Respond ONLY with the clean translated message. Preserve agricultural terms in simple farmer dialect. Do not add quotes, notes or explanations. Text to translate: "${post.content}"`
     };
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+    const response = await generateWithModelFallback(ai, {
       contents: [textPart]
     });
     res.json({ translatedText: response.text?.trim() });
@@ -82242,8 +82288,7 @@ app.post("/api/posts/:id/summarize", async (req, res) => {
     const textPart = {
       text: `Summarize the following farmer discussion post in 1-2 simple, easy-to-understand bullet points or sentences in language code "${language || "en"}" (where 'kn' is Kannada, 'hi' is Hindi, 'en' is English). Keep it short, direct, and actionable for standard rural farmers. Text to summarize: "${post.content}"`
     };
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+    const response = await generateWithModelFallback(ai, {
       contents: [textPart]
     });
     res.json({ summary: response.text?.trim() });
@@ -82263,8 +82308,7 @@ app.post("/api/posts/:id/suggest-reply", async (req, res) => {
     const textPart = {
       text: `Suggest a brief, friendly, highly scientifically accurate expert agriculture advisor comment reply in language "${language || "en"}" (where 'kn' is Kannada, 'hi' is Hindi, 'en' is English) for the following crop problem/farming post: "${post.content}". Deliver ONLY the suggested reply text, keeping it to 1 concise sentence offering clear practical steps.`
     };
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+    const response = await generateWithModelFallback(ai, {
       contents: [textPart]
     });
     res.json({ suggestion: response.text?.trim() });

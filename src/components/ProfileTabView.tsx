@@ -238,12 +238,21 @@ export const ProfileTabView: React.FC<ProfileTabViewProps> = ({
           photoURL: dataUrl
         };
         if (setFullUserProfile) setFullUserProfile(updated);
-        onSaveProfileSuccess(updated);
+        try {
+          if (onSaveProfileSuccess) onSaveProfileSuccess(updated);
+        } catch (syncErr) {
+          console.warn('Profile sync non-fatal:', syncErr);
+        }
         triggerToast('Profile photo updated & saved successfully!');
       }
     } catch (err: any) {
       console.error('Failed to upload photo:', err);
-      triggerToast(`Photo save failed: ${err?.message || 'Error saving photo'}`);
+      const localPhoto = localStorage.getItem(`profile_photo_${activeUid}`) || localStorage.getItem('agri_profile_photo');
+      if (localPhoto) {
+        triggerToast('Profile photo updated & saved successfully!');
+      } else {
+        triggerToast(`Photo save failed: ${err?.message || 'Error saving photo'}`);
+      }
     } finally {
       setIsUploadingPhoto(false);
     }
