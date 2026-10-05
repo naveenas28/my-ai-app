@@ -119,10 +119,8 @@ const getAiClient = () => {
 };
 
 const DEFAULT_GEMINI_MODELS = [
-  'gemini-3.8-flash',
   'gemini-3.5-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash'
+  'gemini-3.8-flash'
 ];
 
 async function generateWithModelFallback(
@@ -135,12 +133,19 @@ async function generateWithModelFallback(
 ) {
   const models = payload.models || DEFAULT_GEMINI_MODELS;
   let lastErr: any = null;
+  const mergedConfig = {
+    ...payload.config,
+    thinkingConfig: {
+      thinkingBudget: 0,
+      ...(payload.config?.thinkingConfig || {})
+    }
+  };
   for (const model of models) {
     try {
       const resp = await aiClient.models.generateContent({
         model,
         contents: payload.contents,
-        config: payload.config
+        config: mergedConfig
       });
       if (resp && resp.text) return resp;
     } catch (e: any) {

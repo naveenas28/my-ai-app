@@ -81245,10 +81245,8 @@ CRITICAL OPERATIONAL RULES:
         });
       }
       const KRISHI_AGENT_MODELS = [
-        "gemini-3.8-flash",
         "gemini-3.5-flash-lite",
-        "gemini-2.5-flash",
-        "gemini-2.0-flash"
+        "gemini-3.8-flash"
       ];
       let response;
       let lastModelError = null;
@@ -81260,6 +81258,9 @@ CRITICAL OPERATIONAL RULES:
             config: {
               systemInstruction,
               temperature: 0.3,
+              thinkingConfig: {
+                thinkingBudget: 0
+              },
               tools: [{ functionDeclarations: KRISHI_AGENT_TOOL_DECLARATIONS }]
             }
           });
@@ -81318,7 +81319,10 @@ CRITICAL OPERATIONAL RULES:
               contents: secondTurnContents,
               config: {
                 systemInstruction,
-                temperature: 0.4
+                temperature: 0.4,
+                thinkingConfig: {
+                  thinkingBudget: 0
+                }
               }
             });
             if (finalResponse) break;
@@ -81508,20 +81512,25 @@ var getAiClient = () => {
   });
 };
 var DEFAULT_GEMINI_MODELS = [
-  "gemini-3.8-flash",
   "gemini-3.5-flash-lite",
-  "gemini-2.5-flash",
-  "gemini-2.0-flash"
+  "gemini-3.8-flash"
 ];
 async function generateWithModelFallback(aiClient, payload) {
   const models = payload.models || DEFAULT_GEMINI_MODELS;
   let lastErr = null;
+  const mergedConfig = {
+    ...payload.config,
+    thinkingConfig: {
+      thinkingBudget: 0,
+      ...payload.config?.thinkingConfig || {}
+    }
+  };
   for (const model of models) {
     try {
       const resp = await aiClient.models.generateContent({
         model,
         contents: payload.contents,
-        config: payload.config
+        config: mergedConfig
       });
       if (resp && resp.text) return resp;
     } catch (e) {
