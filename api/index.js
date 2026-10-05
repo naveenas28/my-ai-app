@@ -81531,12 +81531,27 @@ async function generateWithModelFallback(aiClient, payload) {
   }
   throw lastErr || new Error("All model candidates failed");
 }
-app.get(["/api/health", "/health"], (req, res) => {
+app.get(["/api/health", "/health"], async (req, res) => {
   const currentKey = getEffectiveApiKey();
   const rawKey = process.env.GEMINI_API_KEY || "";
   const matchedEnvKeys = Object.keys(process.env).filter(
     (k) => k.toUpperCase().includes("GEMINI") || k.toUpperCase().includes("GOOGLE") || k.toUpperCase().includes("URL") || k.toUpperCase().includes("GEONAMES")
   );
+  let availableModels = [];
+  let modelListError = null;
+  if (currentKey) {
+    try {
+      const currentAi = getAiClient();
+      const pager = await currentAi.models.list();
+      for await (const m of pager) {
+        if (m.name) {
+          availableModels.push(m.name.replace(/^models\//, ""));
+        }
+      }
+    } catch (e) {
+      modelListError = (e?.message || String(e)).replace(/key=[^&"'\s]+/gi, "key=REDACTED");
+    }
+  }
   res.json({
     status: "ok",
     mode: isProd ? "production" : "development",
@@ -81549,6 +81564,9 @@ app.get(["/api/health", "/health"], (req, res) => {
       isPlaceholder: rawKey.includes("MY_GEMINI_API_KEY"),
       prefix: rawKey.length >= 4 ? rawKey.slice(0, 4) : ""
     },
+    availableModels: availableModels.slice(0, 15),
+    totalModelsFound: availableModels.length,
+    modelListError,
     detectedEnvKeys: matchedEnvKeys,
     costTier: "\u20B90 ACTIVE COST (100% Free / Zero Billing)"
   });
@@ -82035,11 +82053,42 @@ CRITICAL: Translate all string values into the local language with code "${langu
       "gemini-3.5-flash-lite",
       "gemini-2.5-flash",
       "gemini-2.0-flash",
-      "gemini-1.5-flash"
+      "gemini-2.5-flash-lite",
+      "gemini-2.0-flash-lite",
+      "gemini-1.5-flash",
+      "gemini-1.5-pro"
     ];
     let response = null;
     let lastError = null;
+    let successfulModel = null;
+    const modelErrors = {};
     for (const model of visionModels) {
+      try {
+        response = await currentAi.models.generateContent({
+          model,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                imagePart,
+                { text: promptText }
+              ]
+            }
+          ],
+          config: {
+            responseMimeType: "application/json"
+          }
+        });
+        if (response?.text) {
+          successfulModel = `${model}:structured_json`;
+          break;
+        }
+      } catch (mErr) {
+        lastError = mErr;
+        const msg = (mErr?.message || String(mErr)).replace(/key=[^&"'\s]+/gi, "key=REDACTED");
+        modelErrors[`${model}:structured_json`] = msg;
+        console.warn(`[Crop Doctor ${model}:structured_json attempt failed]:`, msg);
+      }
       try {
         response = await currentAi.models.generateContent({
           model,
@@ -82052,26 +82101,35 @@ CRITICAL: Translate all string values into the local language with code "${langu
           }
         });
         if (response?.text) {
+          successfulModel = `${model}:parts_json`;
           break;
         }
       } catch (mErr) {
         lastError = mErr;
-        console.warn(`[Crop Doctor ${model} attempt failed]:`, mErr?.message || mErr);
-        try {
-          response = await currentAi.models.generateContent({
-            model,
-            contents: [
-              imagePart,
-              { text: promptText }
-            ]
-          });
-          if (response?.text) {
-            break;
-          }
-        } catch (mErr2) {
-          lastError = mErr2;
-          console.warn(`[Crop Doctor ${model} non-json fallback attempt failed]:`, mErr2?.message || mErr2);
+        const msg = (mErr?.message || String(mErr)).replace(/key=[^&"'\s]+/gi, "key=REDACTED");
+        modelErrors[`${model}:parts_json`] = msg;
+      }
+      try {
+        response = await currentAi.models.generateContent({
+          model,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                imagePart,
+                { text: promptText }
+              ]
+            }
+          ]
+        });
+        if (response?.text) {
+          successfulModel = `${model}:structured_plain`;
+          break;
         }
+      } catch (mErr) {
+        lastError = mErr;
+        const msg = (mErr?.message || String(mErr)).replace(/key=[^&"'\s]+/gi, "key=REDACTED");
+        modelErrors[`${model}:structured_plain`] = msg;
       }
     }
     if (!response || !response.text) {
@@ -82084,9 +82142,15 @@ CRITICAL: Translate all string values into the local language with code "${langu
       } else if (isAuthOrBlocked) {
         errMsg = "AI vision service API access is restricted. Please check that the Gemini API is enabled for your project.";
       }
+      const safeLastMsg = lastError?.message ? String(lastError.message).replace(/key=[^&"'\s]+/gi, "key=REDACTED") : null;
       return res.status(503).json({
         success: false,
-        error: errMsg
+        error: errMsg,
+        diagnostics: {
+          lastStatus: lastError?.status || null,
+          lastMessage: safeLastMsg,
+          modelErrors
+        }
       });
     }
     let parsed = {};
@@ -82095,7 +82159,10 @@ CRITICAL: Translate all string values into the local language with code "${langu
     } catch {
       const jsonMatch = response.text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        parsed = JSON.parse(jsonMatch[0]);
+        try {
+          parsed = JSON.parse(jsonMatch[0]);
+        } catch {
+        }
       }
     }
     const savedReport = {
@@ -82114,17 +82181,27 @@ CRITICAL: Translate all string values into the local language with code "${langu
       preventionTips: parsed.preventionTips || "Maintain plant spacing for air circulation and practice furrow irrigation to avoid wet foliage.",
       farmerPrecautions: parsed.farmerPrecautions || "Wear safety mask and gloves during chemical application.",
       disclaimer: parsed.disclaimer || "Advisory Assessment: Confirm with local KVK experts for severe crop conditions.",
-      language
+      language,
+      sourceModel: successfulModel || "gemini-vision"
     };
-    serverReports = loadJSON(REPORTS_FILE, []);
-    serverReports = [savedReport, ...serverReports];
-    saveJSON(REPORTS_FILE, serverReports);
+    try {
+      serverReports = loadJSON(REPORTS_FILE, []);
+      serverReports = [savedReport, ...serverReports];
+      saveJSON(REPORTS_FILE, serverReports);
+    } catch (saveErr) {
+      console.warn("Non-fatal server reports memory persistence error:", saveErr);
+    }
     res.json(savedReport);
   } catch (err) {
     console.error("[Leaf Diagnosis Error]:", err?.message || err);
+    const safeOuterMsg = err?.message ? String(err.message).replace(/key=[^&"'\s]+/gi, "key=REDACTED") : null;
     return res.status(503).json({
       success: false,
-      error: "Crop Doctor AI analysis is temporarily unavailable. Please try again."
+      error: "Crop Doctor AI analysis is temporarily unavailable. Please try again.",
+      diagnostics: {
+        stage: "outer_catch",
+        message: safeOuterMsg
+      }
     });
   }
 });
