@@ -82025,6 +82025,12 @@ app.post(["/api/diagnose", "/diagnose"], async (req, res) => {
       mimeType = "image/jpeg";
     }
     base64Clean = base64Clean.replace(/\s/g, "");
+    if (!base64Clean || base64Clean.length < 50) {
+      return res.status(400).json({
+        success: false,
+        error: "The provided image data is invalid or corrupted. Please capture or upload a clear leaf photo."
+      });
+    }
     const imagePart = {
       inlineData: {
         mimeType,
@@ -82049,46 +82055,14 @@ Respond STRICTLY in JSON format matching this schema:
 }
 CRITICAL: Translate all string values into the local language with code "${language}" (where 'kn' is Kannada, 'hi' is Hindi, 'ta' is Tamil, 'te' is Telugu, 'ml' is Malayalam, 'bn' is Bengali, 'mr' is Marathi, 'pa' is Punjabi, 'en' is English). Keep JSON key names EXACTLY in English as defined above. Do not wrap in markdown boxes.`;
     const visionModels = [
-      "gemini-3.8-flash",
       "gemini-3.5-flash-lite",
-      "gemini-2.5-flash",
-      "gemini-2.0-flash",
-      "gemini-2.5-flash-lite",
-      "gemini-2.0-flash-lite",
-      "gemini-1.5-flash",
-      "gemini-1.5-pro"
+      "gemini-3.8-flash"
     ];
     let response = null;
     let lastError = null;
     let successfulModel = null;
     const modelErrors = {};
     for (const model of visionModels) {
-      try {
-        response = await currentAi.models.generateContent({
-          model,
-          contents: [
-            {
-              role: "user",
-              parts: [
-                imagePart,
-                { text: promptText }
-              ]
-            }
-          ],
-          config: {
-            responseMimeType: "application/json"
-          }
-        });
-        if (response?.text) {
-          successfulModel = `${model}:structured_json`;
-          break;
-        }
-      } catch (mErr) {
-        lastError = mErr;
-        const msg = (mErr?.message || String(mErr)).replace(/key=[^&"'\s]+/gi, "key=REDACTED");
-        modelErrors[`${model}:structured_json`] = msg;
-        console.warn(`[Crop Doctor ${model}:structured_json attempt failed]:`, msg);
-      }
       try {
         response = await currentAi.models.generateContent({
           model,
@@ -82101,35 +82075,32 @@ CRITICAL: Translate all string values into the local language with code "${langu
           }
         });
         if (response?.text) {
-          successfulModel = `${model}:parts_json`;
+          successfulModel = model;
           break;
         }
       } catch (mErr) {
         lastError = mErr;
         const msg = (mErr?.message || String(mErr)).replace(/key=[^&"'\s]+/gi, "key=REDACTED");
-        modelErrors[`${model}:parts_json`] = msg;
-      }
-      try {
-        response = await currentAi.models.generateContent({
-          model,
-          contents: [
-            {
-              role: "user",
-              parts: [
-                imagePart,
-                { text: promptText }
-              ]
-            }
-          ]
-        });
-        if (response?.text) {
-          successfulModel = `${model}:structured_plain`;
-          break;
+        modelErrors[`${model}:json`] = msg;
+        console.warn(`[Crop Doctor ${model}:json attempt failed]:`, msg);
+        try {
+          response = await currentAi.models.generateContent({
+            model,
+            contents: [
+              imagePart,
+              { text: promptText }
+            ]
+          });
+          if (response?.text) {
+            successfulModel = `${model}:plain`;
+            break;
+          }
+        } catch (mErr2) {
+          lastError = mErr2;
+          const msg2 = (mErr2?.message || String(mErr2)).replace(/key=[^&"'\s]+/gi, "key=REDACTED");
+          modelErrors[`${model}:plain`] = msg2;
+          console.warn(`[Crop Doctor ${model}:plain attempt failed]:`, msg2);
         }
-      } catch (mErr) {
-        lastError = mErr;
-        const msg = (mErr?.message || String(mErr)).replace(/key=[^&"'\s]+/gi, "key=REDACTED");
-        modelErrors[`${model}:structured_plain`] = msg;
       }
     }
     if (!response || !response.text) {
