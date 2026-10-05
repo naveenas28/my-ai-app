@@ -1386,11 +1386,11 @@ export default function App() {
     let designImageUrl = '';
 
     if (type === 'healthy') {
-      designImageUrl = 'https://images.unsplash.com/photo-1592417817098-8f3d6eb19675?auto=format&fit=crop&q=80&w=400';
+      designImageUrl = 'https://images.unsplash.com/photo-1518531933037-91b2f5f229cc?auto=format&fit=crop&q=80&w=400';
     } else if (type === 'blight') {
       designImageUrl = 'https://images.unsplash.com/photo-1581078426770-6d336e5de7bf?auto=format&fit=crop&q=80&w=400';
     } else {
-      designImageUrl = 'https://images.unsplash.com/photo-1605000797499-95a51c7769ae?auto=format&fit=crop&q=80&w=400';
+      designImageUrl = 'https://images.unsplash.com/photo-1530595467537-0b5996c41f2d?auto=format&fit=crop&q=80&w=400';
     }
 
     setSelectedLeafImage(designImageUrl);

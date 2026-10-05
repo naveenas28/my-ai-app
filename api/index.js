@@ -81987,10 +81987,18 @@ app.post(["/api/diagnose", "/diagnose"], async (req, res) => {
               mimeType = cleanType;
             }
           }
+        } else {
+          return res.status(400).json({
+            success: false,
+            error: "Could not access the leaf image at the provided URL. Please upload a direct photo."
+          });
         }
       } catch (fetchErr) {
         console.error("[Fetch URL Image Handled]", fetchErr?.message || fetchErr);
-        throw fetchErr;
+        return res.status(400).json({
+          success: false,
+          error: "Could not download the provided leaf image. Please upload a direct photo."
+        });
       }
     } else {
       base64Clean = imageBase64.replace(/^data:image\/\w+;base64,/, "");
