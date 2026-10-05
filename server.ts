@@ -760,6 +760,7 @@ CRITICAL: Translate all string values into the local language with code "${langu
     const modelErrors: Record<string, string> = {};
 
     for (const model of visionModels) {
+      // Primary: Fast zero-thinking budget with JSON output mode
       try {
         response = await currentAi.models.generateContent({
           model,
@@ -769,36 +770,68 @@ CRITICAL: Translate all string values into the local language with code "${langu
           ],
           config: {
             responseMimeType: 'application/json',
+            maxOutputTokens: 1024,
+            thinkingConfig: {
+              thinkingBudget: 0
+            }
           }
         });
         if (response?.text) {
-          successfulModel = model;
+          successfulModel = `${model}:fast_json`;
           break;
         }
       } catch (mErr: any) {
         lastError = mErr;
         const msg = (mErr?.message || String(mErr)).replace(/key=[^&"'\s]+/gi, 'key=REDACTED');
-        modelErrors[`${model}:json`] = msg;
-        console.warn(`[Crop Doctor ${model}:json attempt failed]:`, msg);
+        modelErrors[`${model}:fast_json`] = msg;
+        console.warn(`[Crop Doctor ${model}:fast_json attempt failed]:`, msg);
 
-        // Fast fallback: retry without responseMimeType in case model doesn't support json mode
+        // Fallback 1: Standard JSON output mode without thinkingConfig
         try {
           response = await currentAi.models.generateContent({
             model,
             contents: [
               imagePart,
               { text: promptText }
-            ]
+            ],
+            config: {
+              responseMimeType: 'application/json',
+              maxOutputTokens: 1024
+            }
           });
           if (response?.text) {
-            successfulModel = `${model}:plain`;
+            successfulModel = `${model}:standard_json`;
             break;
           }
         } catch (mErr2: any) {
           lastError = mErr2;
           const msg2 = (mErr2?.message || String(mErr2)).replace(/key=[^&"'\s]+/gi, 'key=REDACTED');
-          modelErrors[`${model}:plain`] = msg2;
-          console.warn(`[Crop Doctor ${model}:plain attempt failed]:`, msg2);
+          modelErrors[`${model}:standard_json`] = msg2;
+
+          // Fallback 2: Plain text with thinkingBudget: 0
+          try {
+            response = await currentAi.models.generateContent({
+              model,
+              contents: [
+                imagePart,
+                { text: promptText }
+              ],
+              config: {
+                maxOutputTokens: 1024,
+                thinkingConfig: {
+                  thinkingBudget: 0
+                }
+              }
+            });
+            if (response?.text) {
+              successfulModel = `${model}:plain`;
+              break;
+            }
+          } catch (mErr3: any) {
+            lastError = mErr3;
+            const msg3 = (mErr3?.message || String(mErr3)).replace(/key=[^&"'\s]+/gi, 'key=REDACTED');
+            modelErrors[`${model}:plain`] = msg3;
+          }
         }
       }
     }
