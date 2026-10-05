@@ -4,8 +4,22 @@ import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import { getMessaging, isSupported as isMessagingSupported, Messaging } from 'firebase/messaging';
 import firebaseConfig from '../firebase-applet-config.json';
 
-export const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// Support runtime environment variable overrides if configured in Vercel or local .env
+const env = (import.meta as any).env || {};
+const resolvedFirebaseConfig = {
+  ...firebaseConfig,
+  projectId: env.VITE_FIREBASE_PROJECT_ID || firebaseConfig.projectId,
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfig.authDomain,
+  apiKey: env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey,
+  appId: env.VITE_FIREBASE_APP_ID || firebaseConfig.appId,
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfig.storageBucket,
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfig.messagingSenderId,
+};
+
+const resolvedDatabaseId = env.VITE_FIREBASE_DATABASE_ID || firebaseConfig.firestoreDatabaseId;
+
+export const app = initializeApp(resolvedFirebaseConfig);
+export const db = getFirestore(app, resolvedDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({
