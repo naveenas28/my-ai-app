@@ -81972,7 +81972,7 @@ app.post(["/api/diagnose", "/diagnose"], async (req, res) => {
     let mimeType = "image/jpeg";
     let base64Clean = imageBase64;
     if (match) {
-      mimeType = match[1];
+      mimeType = match[1].split(";")[0].trim().toLowerCase();
       base64Clean = imageBase64.substring(match[0].length);
     } else if (base64Clean.startsWith("http://") || base64Clean.startsWith("https://")) {
       try {
@@ -81982,7 +81982,10 @@ app.post(["/api/diagnose", "/diagnose"], async (req, res) => {
           base64Clean = Buffer.from(buffer).toString("base64");
           const contentType = imageRes.headers.get("content-type");
           if (contentType) {
-            mimeType = contentType;
+            const cleanType = contentType.split(";")[0].trim().toLowerCase();
+            if (cleanType.startsWith("image/")) {
+              mimeType = cleanType;
+            }
           }
         }
       } catch (fetchErr) {
@@ -81991,6 +81994,9 @@ app.post(["/api/diagnose", "/diagnose"], async (req, res) => {
       }
     } else {
       base64Clean = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+    }
+    if (!mimeType || !mimeType.startsWith("image/")) {
+      mimeType = "image/jpeg";
     }
     base64Clean = base64Clean.replace(/\s/g, "");
     const imagePart = {
